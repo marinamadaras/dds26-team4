@@ -28,6 +28,7 @@ spec:
       containers:
         - name: order
           image: order:latest
+          imagePullPolicy: Never
           resources:
             limits:
               memory: "1Gi"
@@ -40,8 +41,8 @@ spec:
           ports:
             - containerPort: 5000
           env:
-            - name: USER_SERVICE_URL
-              value: "user-service"
+            - name: USER_SERVICE_URL # todo figure out why there is a user service but no payment
+              value: "payment-service"
             - name: STOCK_SERVICE_URL
               value: "stock-service"
             - name: REDIS_HOST
@@ -52,3 +53,5 @@ spec:
               value: "redis"
             - name: REDIS_DB
               value: "0"
+            - name: GATEWAY_URL
+              value: "http://ingress-nginx-controller.ingress-nginx.svc.cluster.local" # todo, might want to change this with minikube
