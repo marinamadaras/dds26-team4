@@ -25,7 +25,10 @@ services:
 
   order-db:
     image: redis:7.2-bookworm
-    command: redis-server --requirepass redis --maxmemory 512mb
+    command: redis-server --requirepass redis --maxmemory 512mb --appendonly yes --appendfsync everysec
+    volumes:
+      - order-db-data:/data
+    restart: unless-stopped
 
   stock-service:
     build: ./stock
@@ -38,7 +41,10 @@ services:
 
   stock-db:
     image: redis:7.2-bookworm
-    command: redis-server --requirepass redis --maxmemory 512mb
+    command: redis-server --requirepass redis --maxmemory 512mb --appendonly yes --appendfsync everysec
+    volumes:
+      - stock-db-data:/data
+    restart: unless-stopped
 
   payment-service:
     build: ./payment
@@ -51,4 +57,12 @@ services:
 
   payment-db:
     image: redis:7.2-bookworm
-    command: redis-server --requirepass redis --maxmemory 512mb
+    command: redis-server --requirepass redis --maxmemory 512mb --appendonly yes --appendfsync everysec
+    volumes:
+      - payment-db-data:/data
+    restart: unless-stopped
+
+volumes:
+  order-db-data:
+  stock-db-data:
+  payment-db-data:

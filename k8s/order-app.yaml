@@ -46,7 +46,7 @@ spec:
             - name: STOCK_SERVICE_URL
               value: "stock-service"
             - name: REDIS_HOST
-              value: redis-master
+              value: order-db
             - name: REDIS_PORT
               value: '6379'
             - name: REDIS_PASSWORD

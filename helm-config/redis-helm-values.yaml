@@ -1,5 +1,6 @@
 auth:
   password: redis
+architecture: standalone # so these databases dont have master slave for now
 master:
   resources:
     requests:
@@ -11,15 +12,3 @@ master:
   persistence:
     enabled: true # how we keep data persisted
     size: 1Gi        # reduced from default
-
-replica:
-  resources:
-    requests:
-      memory: "256Mi"
-      cpu: "100m"
-    limits:
-      memory: "512Mi"
-      cpu: "500m"
-  persistence:
-    enabled: true
-    size: 1Gi
