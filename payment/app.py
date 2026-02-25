@@ -106,6 +106,23 @@ def remove_credit(user_id: str, amount: int):
     return Response(f"User: {user_id} credit updated to: {user_entry.credit}", status=200)
 
 
+# If the completion of the order fails we need to refund the customer (not sure if necessary)
+@app.post('/refund/<user_id>/<amount>')
+def refund(user_id: str, amount: int):
+    app.logger.debug(f"Refunding {amount} credit to user: {user_id}")
+    user_entry: UserValue = get_user_from_db(user_id)
+    user_entry.credit += int(amount)
+    try:
+        db.set(user_id, msgpack.encode(user_entry))
+    except redis.exceptions.RedisError:
+        return abort(400, DB_ERROR_STR)
+
+    return Response(
+        f"Refunded {amount} to user: {user_id}. New credit: {user_entry.credit}",
+        status=200
+    )
+
+
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=8000, debug=True)
 else:
