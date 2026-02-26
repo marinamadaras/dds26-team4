@@ -40,15 +40,10 @@ services:
     image: apache/kafka:latest
     depends_on:
       - kafka
-    entrypoint: [ "/bin/bash", "-c" ]
-    command: >
-      "
-      /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 --create --if-not-exists --topic stock.commands --partitions 3 --replication-factor 1;
-      /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 --create --if-not-exists --topic stock.replies --partitions 3 --replication-factor 1;
-      /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 --create --if-not-exists --topic payment.commands --partitions 3 --replication-factor 1;
-      /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 --create --if-not-exists --topic payment.replies --partitions 3 --replication-factor 1;
-      echo 'Topics created';
-      "
+    volumes:
+      - ./kafka/init-topics.sh:/init-topics.sh
+      - ./kafka/topics.txt:/topics.txt
+    entrypoint: [ "/bin/bash", "/init-topics.sh" ]
 
   order-service:
     build: ./order
