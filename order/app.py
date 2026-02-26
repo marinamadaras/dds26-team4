@@ -114,6 +114,15 @@ def send_post_request(url: str):
         return response
 
 
+def send_post_request_with_headers(url: str, headers: dict[str, str]):
+    try:
+        response = requests.post(url, headers=headers)
+    except requests.exceptions.RequestException:
+        abort(400, REQ_ERROR_STR)
+    else:
+        return response
+
+
 def send_get_request(url: str):
     try:
         response = requests.get(url)
@@ -141,15 +150,23 @@ def add_item(order_id: str, item_id: str, quantity: int):
                     status=200)
 
 
-def rollback_stock(removed_items: list[tuple[str, int]]):
+def rollback_stock(order_id: str, removed_items: list[tuple[str, int]]):
     for item_id, quantity in removed_items:
-        send_post_request(f"{GATEWAY_URL}/stock/add/{item_id}/{quantity}")
+        # Deterministic key ensures rollback retries do not add stock twice.
+        op_id = f"checkout:{order_id}:stock:rollback_add:{item_id}:{quantity}" # this is creating the idempotency key
+        send_post_request_with_headers(
+            f"{GATEWAY_URL}/stock/add/{item_id}/{quantity}",
+            {"Idempotency-Key": op_id}
+        )
 
 
 @app.post('/checkout/<order_id>')
 def checkout(order_id: str):
     app.logger.debug(f"Checking out {order_id}")
     order_entry: OrderValue = get_order_from_db(order_id)
+    # Safe retry for duplicate checkout calls after success.
+    if order_entry.paid:
+        return Response("Checkout successful", status=200)
     # get the quantity per item
     items_quantities: dict[str, int] = defaultdict(int)
     for item_id, quantity in order_entry.items:
@@ -158,16 +175,28 @@ def checkout(order_id: str):
     # for rollback purposes.
     removed_items: list[tuple[str, int]] = []
     for item_id, quantity in items_quantities.items():
-        stock_reply = send_post_request(f"{GATEWAY_URL}/stock/subtract/{item_id}/{quantity}")
+        # Same checkout/order item uses the same key across retries.
+        op_id = f"checkout:{order_id}:stock:subtract:{item_id}:{quantity}"
+        stock_reply = send_post_request_with_headers(
+            f"{GATEWAY_URL}/stock/subtract/{item_id}/{quantity}",
+            {"Idempotency-Key": op_id}
+        )
         if stock_reply.status_code != 200:
             # If one item does not have enough stock we need to rollback
-            rollback_stock(removed_items)
+            rollback_stock(order_id, removed_items)
             abort(400, f'Out of stock on item_id: {item_id}')
         removed_items.append((item_id, quantity))
-    user_reply = send_post_request(f"{GATEWAY_URL}/payment/pay/{order_entry.user_id}/{order_entry.total_cost}")
+    # Same checkout/payment action uses the same key across retries.
+    payment_op_id = (
+        f"checkout:{order_id}:payment:pay:{order_entry.user_id}:{order_entry.total_cost}"
+    )
+    user_reply = send_post_request_with_headers(
+        f"{GATEWAY_URL}/payment/pay/{order_entry.user_id}/{order_entry.total_cost}",
+        {"Idempotency-Key": payment_op_id}
+    )
     if user_reply.status_code != 200:
         # If the user does not have enough credit we need to rollback all the item stock subtractions
-        rollback_stock(removed_items)
+        rollback_stock(order_id, removed_items)
         abort(400, "User out of credit")
     order_entry.paid = True
     try:

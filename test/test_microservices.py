@@ -1,9 +1,58 @@
 import unittest
+import uuid
+
+import requests
 
 import utils as tu
 
 
 class TestMicroservices(unittest.TestCase):
+
+    def test_stock_subtract_idempotency_key(self):
+        item: dict = tu.create_item(5)
+        self.assertIn('item_id', item)
+        item_id: str = item['item_id']
+
+        add_stock_response = tu.add_stock(item_id, 10)
+        self.assertTrue(tu.status_code_is_success(add_stock_response))
+
+        idem_key = f"test-stock-subtract-{uuid.uuid4()}"
+        headers = {"Idempotency-Key": idem_key}
+        url = f"{tu.STOCK_URL}/stock/subtract/{item_id}/3" # remove 3 things from the stock
+
+        # calling post twice with the same key if it will eb added twice or not
+        first = requests.post(url, headers=headers)
+        second = requests.post(url, headers=headers)
+
+        self.assertTrue(tu.status_code_is_success(first.status_code))
+        self.assertTrue(tu.status_code_is_success(second.status_code))
+
+        # Must be subtracted exactly once (10 -> 7), not twice (10 -> 4).
+        final_stock: int = tu.find_item(item_id)['stock']
+        self.assertEqual(final_stock, 7)
+
+    def test_payment_pay_idempotency_key(self):
+        user: dict = tu.create_user()
+        self.assertIn('user_id', user)
+        user_id: str = user['user_id']
+
+        add_credit_response = tu.add_credit_to_user(user_id, 20)
+        self.assertTrue(tu.status_code_is_success(add_credit_response))
+
+        idem_key = f"test-payment-pay-{uuid.uuid4()}"
+        headers = {"Idempotency-Key": idem_key}
+        url = f"{tu.PAYMENT_URL}/payment/pay/{user_id}/7"
+
+        # try to pay twice with the same idempotency key
+        first = requests.post(url, headers=headers)
+        second = requests.post(url, headers=headers)
+
+        self.assertTrue(tu.status_code_is_success(first.status_code))
+        self.assertTrue(tu.status_code_is_success(second.status_code))
+
+        # Must be charged exactly once (20 -> 13), not twice (20 -> 6).
+        final_credit: int = tu.find_user(user_id)['credit']
+        self.assertEqual(final_credit, 13)
 
     def test_stock(self):
         # Test /stock/item/create/<price>

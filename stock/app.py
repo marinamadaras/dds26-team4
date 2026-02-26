@@ -6,7 +6,8 @@ import uuid
 import redis
 
 from msgspec import msgpack, Struct
-from flask import Flask, jsonify, abort, Response
+from flask import Flask, jsonify, abort, Response, request
+from werkzeug.exceptions import HTTPException
 
 
 DB_ERROR_STR = "DB error"
@@ -29,6 +30,38 @@ atexit.register(close_db_connection)
 class StockValue(Struct):
     stock: int
     price: int
+
+
+class IdempotencyResult(Struct):
+    status: int
+    body: str
+
+
+def idempotency_record_key(scope: str, operation_id: str) -> str:
+    # Scope keeps different endpoints from colliding on the same key.
+    return f"_idem:{scope}:{operation_id}"
+
+
+def get_idempotency_result(scope: str) -> IdempotencyResult | None:
+    operation_id = request.headers.get("Idempotency-Key")
+    if not operation_id: # if the client did not send an idempotency key, then it is not applied, the key is generated at order service
+        return None
+    try:
+        entry: bytes = db.get(idempotency_record_key(scope, operation_id))
+    except redis.exceptions.RedisError:
+        return abort(400, DB_ERROR_STR)
+    return msgpack.decode(entry, type=IdempotencyResult) if entry else None
+
+
+def store_idempotency_result(scope: str, status: int, body: str):
+    operation_id = request.headers.get("Idempotency-Key")
+    if not operation_id:
+        return
+    result = IdempotencyResult(status=status, body=body)
+    try:
+        db.set(idempotency_record_key(scope, operation_id), msgpack.encode(result))
+    except redis.exceptions.RedisError:
+        abort(400, DB_ERROR_STR)
 
 
 def get_item_from_db(item_id: str) -> StockValue | None:
@@ -84,29 +117,63 @@ def find_item(item_id: str):
 
 @app.post('/add/<item_id>/<amount>')
 def add_stock(item_id: str, amount: int):
-    item_entry: StockValue = get_item_from_db(item_id)
-    # update stock, serialize and update database
-    item_entry.stock += int(amount)
+    # If this operation ID was already applied, return the stored response.
+    cached = get_idempotency_result("add_stock")
+    if cached is not None:
+        return Response(cached.body, status=cached.status)
+
     try:
+        item_entry: StockValue = get_item_from_db(item_id)
+        # update stock, serialize and update database
+        item_entry.stock += int(amount)
         db.set(item_id, msgpack.encode(item_entry))
     except redis.exceptions.RedisError:
         return abort(400, DB_ERROR_STR)
-    return Response(f"Item: {item_id} stock updated to: {item_entry.stock}", status=200)
+    except HTTPException as error:
+        body = str(error.description)
+        status = int(error.code) if error.code else 500
+        # Record failure too, so retries return the same outcome.
+        store_idempotency_result("add_stock", status, body)
+        return Response(body, status=status)
+    try:
+        response_body = f"Item: {item_id} stock updated to: {item_entry.stock}"
+        # Persist first successful result for deduplication on retries.
+        store_idempotency_result("add_stock", 200, response_body)
+    except redis.exceptions.RedisError:
+        return abort(400, DB_ERROR_STR)
+    return Response(response_body, status=200)
 
 
 @app.post('/subtract/<item_id>/<amount>')
 def remove_stock(item_id: str, amount: int):
-    item_entry: StockValue = get_item_from_db(item_id)
-    # update stock, serialize and update database
-    item_entry.stock -= int(amount)
-    app.logger.debug(f"Item: {item_id} stock updated to: {item_entry.stock}")
-    if item_entry.stock < 0:
-        abort(400, f"Item: {item_id} stock cannot get reduced below zero!")
+    # If this operation ID was already applied, return the stored response.
+    cached = get_idempotency_result("remove_stock")
+    if cached is not None:
+        return Response(cached.body, status=cached.status)
+
     try:
+        item_entry: StockValue = get_item_from_db(item_id)
+        # update stock, serialize and update database
+        item_entry.stock -= int(amount)
+        app.logger.debug(f"Item: {item_id} stock updated to: {item_entry.stock}")
+        if item_entry.stock < 0:
+            abort(400, f"Item: {item_id} stock cannot get reduced below zero!")
         db.set(item_id, msgpack.encode(item_entry))
     except redis.exceptions.RedisError:
         return abort(400, DB_ERROR_STR)
-    return Response(f"Item: {item_id} stock updated to: {item_entry.stock}", status=200)
+    except HTTPException as error:
+        body = str(error.description)
+        status = int(error.code) if error.code else 500
+        # Record failure too, so retries return the same outcome.
+        store_idempotency_result("remove_stock", status, body)
+        return Response(body, status=status)
+    try:
+        response_body = f"Item: {item_id} stock updated to: {item_entry.stock}"
+        # Persist first successful result for deduplication on retries.
+        store_idempotency_result("remove_stock", 200, response_body)
+    except redis.exceptions.RedisError:
+        return abort(400, DB_ERROR_STR)
+    return Response(response_body, status=200)
 
 
 if __name__ == '__main__':
