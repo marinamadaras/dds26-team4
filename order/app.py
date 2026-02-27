@@ -3,6 +3,7 @@ import os
 import atexit
 import random
 import uuid
+import threading
 from collections import defaultdict
 
 import redis
@@ -36,14 +37,18 @@ db: redis.Redis = redis.Redis(host=os.environ['REDIS_HOST'],
 def close_db_connection():
     db.close()
 
+def start_consumer():
+    thread = threading.Thread(target=consumer_loop, daemon=True)
+    thread.start()
 
 atexit.register(close_db_connection)
 
-def publish_find_stock(item_id: str):
-    message = FindStock(item_id=item_id)
+def publish_find_stock(order_id: str, item_id: str, quantity: int):
+    message = FindStock(item_id=item_id, quantity=quantity)
+
     publish(
         topic="find.stock",
-        key=message.item_id,
+        key=order_id,
         value=message,
     )
 
@@ -58,14 +63,32 @@ def publish_subtract_stock(order_id: str):
 
 
 def handle_find_stock_reply(message: FindStockReply):
-    # todo: perform order-service reply handling logic here
-    app.logger.debug(
-        "find.stock.replies received item_id=%s found=%s stock=%s price=%s",
-        message.item_id,
-        message.found,
-        message.stock,
-        message.price,
-    )
+    if not message.found:
+        app.logger.warning(
+            f"Stock not found for item {message.item_id} in order {message.order_id}"
+        )
+        return  # nothing to update
+
+    try:
+        order_entry: OrderValue = get_order_from_db(message.order_id)
+
+        order_entry.items.append(
+            (message.item_id, int(message.quantity))
+        )
+
+        order_entry.total_cost += (
+            int(message.quantity) * message.price
+        )
+
+        db.set(message.order_id, msgpack.encode(order_entry))
+
+        app.logger.info(
+            f"Order {message.order_id} updated asynchronously"
+        )
+
+    except redis.exceptions.RedisError as e:
+        app.logger.error(f"DB error: {e}")
+        raise  # todo: let consumer retry?
 
 
 def handle_stock_subtracted_reply(message: StockSubtractedReply):
@@ -206,20 +229,12 @@ def send_get_request(url: str):
 
 @app.post('/addItem/<order_id>/<item_id>/<quantity>')
 def add_item(order_id: str, item_id: str, quantity: int):
-    order_entry: OrderValue = get_order_from_db(order_id)
-    item_reply = send_get_request(f"{GATEWAY_URL}/stock/find/{item_id}")
-    if item_reply.status_code != 200:
-        # Request failed because item does not exist
-        abort(400, f"Item: {item_id} does not exist!")
-    item_json: dict = item_reply.json()
-    order_entry.items.append((item_id, int(quantity)))
-    order_entry.total_cost += int(quantity) * item_json["price"]
-    try:
-        db.set(order_id, msgpack.encode(order_entry))
-    except redis.exceptions.RedisError:
-        return abort(400, DB_ERROR_STR)
-    return Response(f"Item: {item_id} added to: {order_id} price updated to: {order_entry.total_cost}",
-                    status=200)
+    publish_find_stock(order_id, item_id, quantity)
+
+    return Response(
+        f"Stock check requested for item {item_id} in order {order_id} ",
+        status=202
+    )
 
 
 def rollback_stock(removed_items: list[tuple[str, int]]):
@@ -260,6 +275,7 @@ def checkout(order_id: str):
 
 
 if __name__ == '__main__':
+    start_consumer()
     app.run(host="0.0.0.0", port=8000, debug=True)
 else:
     gunicorn_logger = logging.getLogger('gunicorn.error')

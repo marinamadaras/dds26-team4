@@ -9,6 +9,7 @@ class BaseMessage(msgspec.Struct, kw_only=True):
 ## to topic: find.stock
 class FindStock(BaseMessage):
     item_id: str
+    quantity: int
     type: str = "FindStock"
 
 ## to topic: subtract.stock
@@ -21,8 +22,10 @@ class SubtractStock(BaseMessage):
 
 ## from topic find.stock.replies
 class FindStockReply(BaseMessage):
+    order_id: str
     item_id: str
     found: bool
+    quantity: int
     stock: int | None = None
     price: int | None = None
     type: str = "FindStockReply"
