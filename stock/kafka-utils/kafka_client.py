@@ -1,18 +1,30 @@
 import os
-import json
+import msgspec
 from confluent_kafka import Producer, Consumer
+from messages import BaseMessage, MESSAGE_TYPES
 
 BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:29092")
 
 producer = Producer({"bootstrap.servers": BOOTSTRAP})
 
-def publish(topic: str, key: str, value: dict):
+def publish(topic: str, key: str, value: BaseMessage):
     producer.produce(
         topic,
         key=key.encode(),
-        value=json.dumps(value).encode()
+        value=msgspec.json.encode(value)
     )
     producer.flush(2)
+
+
+def decode_message(raw_value: bytes) -> BaseMessage:
+    payload = msgspec.json.decode(raw_value, type=dict)
+    message_type = payload.get("type")
+    if not message_type:
+        raise ValueError("Message is missing required 'type' field")
+    message_cls = MESSAGE_TYPES.get(message_type)
+    if message_cls is None:
+        raise ValueError(f"Unknown message type: {message_type}")
+    return msgspec.json.decode(raw_value, type=message_cls)
 
 def create_consumer(
     group_id: str,
