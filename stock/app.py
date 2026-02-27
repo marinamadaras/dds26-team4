@@ -8,13 +8,14 @@ import redis
 
 from msgspec import msgpack, Struct
 from flask import Flask, jsonify, abort, Response
-from stock.utils.kafka_client import publish, create_consumer, decode_message
-from stock.utils.messages import BaseMessage, FindStock, FindStockReply
+from kafka_client import publish, create_consumer, decode_message
+from messages import BaseMessage, FindStock, FindStockReply
 
 
 DB_ERROR_STR = "DB error"
 
 app = Flask("stock-service")
+_consumer_thread: threading.Thread | None = None
 
 db: redis.Redis = redis.Redis(host=os.environ['REDIS_HOST'],
                               port=int(os.environ['REDIS_PORT']),
@@ -32,9 +33,6 @@ atexit.register(close_db_connection)
 class StockValue(Struct):
     stock: int
     price: int
-
-
-_consumer_started = False
 
 
 def get_item_from_db(item_id: str) -> StockValue | None:
@@ -60,6 +58,7 @@ def get_item_from_db_nullable(item_id: str) -> StockValue | None:
 
 
 def handle_find_stock(message: FindStock, order_id: str):
+    app.logger.info("received find.stock request order_id=%s item_id=%s qty=%s", order_id, message.item_id, message.quantity)
     item_entry = get_item_from_db_nullable(message.item_id)
     if item_entry is None:
         reply = FindStockReply(
@@ -83,6 +82,7 @@ def handle_find_stock(message: FindStock, order_id: str):
         key=order_id,
         value=reply,
     )
+    app.logger.info("published find.stock.replies order_id=%s item_id=%s found=%s", order_id, message.item_id, reply.found)
 
 
 def handle_message(message: BaseMessage, key: str):
@@ -93,33 +93,40 @@ def handle_message(message: BaseMessage, key: str):
 
 
 def consumer_loop():
+    app.logger.info("stock consumer loop starting")
     consumer = create_consumer(
-        group_id="stock-service",
+        group_id="stock-service-v2",
         topics=["find.stock"],
+        auto_offset_reset="earliest",
+        enable_auto_commit=False,
     )
     while True:
         msg = consumer.poll(1.0)
         if msg is None:
             continue
         if msg.error():
-            app.logger.debug(f"Kafka error: {msg.error()}")
+            app.logger.error("Kafka error: %s", msg.error())
             continue
         try:
             message = decode_message(msg.value())
             key = msg.key().decode() if msg.key() else ""
+            app.logger.info("consumed topic=%s key=%s type=%s", msg.topic(), key, message.type)
             handle_message(message, key)
             consumer.commit(message=msg)
         except Exception as e:
-            app.logger.debug(f"Processing error: {e}")
+            app.logger.exception("Processing error in stock consumer: %s", e)
+            # prevent one malformed record from blocking the partition forever
+            consumer.commit(message=msg)
 
 
 def start_consumer():
-    global _consumer_started
-    if _consumer_started:
+    global _consumer_thread
+    if _consumer_thread is not None and _consumer_thread.is_alive():
         return
     thread = threading.Thread(target=consumer_loop, daemon=True)
     thread.start()
-    _consumer_started = True
+    _consumer_thread = thread
+    app.logger.info("stock consumer thread started")
 
 
 @app.post('/item/create/<price>')
@@ -190,6 +197,7 @@ if __name__ == '__main__':
     start_consumer()
     app.run(host="0.0.0.0", port=8000, debug=True)
 else:
+    start_consumer()
     gunicorn_logger = logging.getLogger('gunicorn.error')
     app.logger.handlers = gunicorn_logger.handlers
     app.logger.setLevel(gunicorn_logger.level)

@@ -12,8 +12,8 @@ import requests
 from msgspec import msgpack, Struct
 from flask import Flask, jsonify, abort, Response
 
-from order.utils.kafka_client import publish, create_consumer, decode_message
-from order.utils.messages import (
+from kafka_client import publish, create_consumer, decode_message
+from messages import (
     BaseMessage,
     SubtractStock,
     StockSubtractedReply,
@@ -27,6 +27,7 @@ REQ_ERROR_STR = "Requests error"
 GATEWAY_URL = os.environ['GATEWAY_URL']
 
 app = Flask("order-service")
+_consumer_thread: threading.Thread | None = None
 
 db: redis.Redis = redis.Redis(host=os.environ['REDIS_HOST'],
                               port=int(os.environ['REDIS_PORT']),
@@ -38,13 +39,18 @@ def close_db_connection():
     db.close()
 
 def start_consumer():
+    global _consumer_thread
+    if _consumer_thread is not None and _consumer_thread.is_alive():
+        return
     thread = threading.Thread(target=consumer_loop, daemon=True)
     thread.start()
+    _consumer_thread = thread
+    app.logger.info("order consumer thread started")
 
 atexit.register(close_db_connection)
 
 def publish_find_stock(order_id: str, item_id: str, quantity: int):
-    message = FindStock(item_id=item_id, quantity=quantity)
+    message = FindStock(item_id=item_id, quantity=int(quantity))
 
     publish(
         topic="find.stock",
@@ -63,6 +69,7 @@ def publish_subtract_stock(order_id: str):
 
 
 def handle_find_stock_reply(message: FindStockReply):
+    app.logger.info(f"received find stock reply: {message.order_id}")
     if not message.found:
         app.logger.warning(
             f"Stock not found for item {message.item_id} in order {message.order_id}"
@@ -110,9 +117,12 @@ def handle_message(message: BaseMessage):
 
 
 def consumer_loop():
+    app.logger.info("order consumer loop starting")
     consumer = create_consumer(
-        group_id="order-service",
+        group_id="order-service-v2",
         topics=["find.stock.replies", "subtract.stock.replies"],
+        auto_offset_reset="earliest",
+        enable_auto_commit=False,
     )
 
     while True:
@@ -122,16 +132,19 @@ def consumer_loop():
             continue
 
         if msg.error():
-            app.logger.debug(f"Kafka error: {msg.error()}")
+            app.logger.error("Kafka error: %s", msg.error())
             continue
 
         try:
             message = decode_message(msg.value())
+            key = msg.key().decode() if msg.key() else ""
+            app.logger.info("consumed topic=%s key=%s type=%s", msg.topic(), key, message.type)
             handle_message(message)
             consumer.commit(message=msg)
 
         except Exception as e:
-            app.logger.debug(f"Processing error: {e}")
+            app.logger.exception("Processing error in order consumer: %s", e)
+            consumer.commit(message=msg)
             # todo: perform retry logic here
             # no commit -> message will be retried
 
@@ -278,6 +291,7 @@ if __name__ == '__main__':
     start_consumer()
     app.run(host="0.0.0.0", port=8000, debug=True)
 else:
+    start_consumer()
     gunicorn_logger = logging.getLogger('gunicorn.error')
     app.logger.handlers = gunicorn_logger.handlers
     app.logger.setLevel(gunicorn_logger.level)

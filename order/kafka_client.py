@@ -1,19 +1,25 @@
 import os
+import logging
+
 import msgspec
 from confluent_kafka import Producer, Consumer
+
 from messages import BaseMessage, MESSAGE_TYPES
 
 BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:29092")
 
 producer = Producer({"bootstrap.servers": BOOTSTRAP})
+logger = logging.getLogger(__name__)
+
 
 def publish(topic: str, key: str, value: BaseMessage):
     producer.produce(
         topic,
         key=key.encode(),
-        value=msgspec.json.encode(value)
+        value=msgspec.json.encode(value),
     )
     producer.flush(2)
+    logger.info("published %s to %s", topic, key)
 
 
 def decode_message(raw_value: bytes) -> BaseMessage:
@@ -25,6 +31,7 @@ def decode_message(raw_value: bytes) -> BaseMessage:
     if message_cls is None:
         raise ValueError(f"Unknown message type: {message_type}")
     return msgspec.json.decode(raw_value, type=message_cls)
+
 
 def create_consumer(
     group_id: str,

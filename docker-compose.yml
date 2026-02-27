@@ -35,11 +35,18 @@ services:
 
       KAFKA_LOG_DIRS: /tmp/kraft-combined-logs
       CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+    healthcheck:
+      test: [ "CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server kafka:29092 >/dev/null 2>&1" ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
 
   kafka-init:
     image: apache/kafka:latest
     depends_on:
-      - kafka
+      kafka:
+        condition: service_healthy
     volumes:
       - ./kafka/init-topics.sh:/init-topics.sh
       - ./kafka/topics.txt:/topics.txt
@@ -51,12 +58,14 @@ services:
     environment:
       - GATEWAY_URL=http://gateway:80
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
-    command: gunicorn -b 0.0.0.0:5000 -w 2 --timeout 30 --log-level=info app:app
+    command: gunicorn -b 0.0.0.0:5000 -w 1 --timeout 30 --log-level=info app:app
     env_file:
       - env/order_redis.env
     depends_on:
-      - order-db
-      - kafka
+      order-db:
+        condition: service_started
+      kafka:
+        condition: service_healthy
 
   order-db:
     image: redis:7.2-bookworm
@@ -67,12 +76,14 @@ services:
     image: stock:latest
     environment:
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
-    command: gunicorn -b 0.0.0.0:5000 -w 2 --timeout 30 --log-level=info app:app
+    command: gunicorn -b 0.0.0.0:5000 -w 1 --timeout 30 --log-level=info app:app
     env_file:
       - env/stock_redis.env
     depends_on:
-      - stock-db
-      - kafka
+      stock-db:
+        condition: service_started
+      kafka:
+        condition: service_healthy
 
   stock-db:
     image: redis:7.2-bookworm
@@ -87,8 +98,10 @@ services:
     env_file:
       - env/payment_redis.env
     depends_on:
-      - payment-db
-      - kafka
+      payment-db:
+        condition: service_started
+      kafka:
+        condition: service_healthy
 
   payment-db:
     image: redis:7.2-bookworm
