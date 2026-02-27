@@ -11,6 +11,14 @@ import requests
 from msgspec import msgpack, Struct
 from flask import Flask, jsonify, abort, Response
 
+from order.utils.kafka_client import publish, create_consumer, decode_message
+from order.utils.messages import (
+    BaseMessage,
+    SubtractStock,
+    StockSubtractedReply,
+    FindStock,
+    FindStockReply,
+)
 
 DB_ERROR_STR = "DB error"
 REQ_ERROR_STR = "Requests error"
@@ -30,6 +38,79 @@ def close_db_connection():
 
 
 atexit.register(close_db_connection)
+
+def publish_find_stock(item_id: str):
+    message = FindStock(item_id=item_id)
+    publish(
+        topic="find.stock",
+        key=message.item_id,
+        value=message,
+    )
+
+
+def publish_subtract_stock(order_id: str):
+    message = SubtractStock(order_id=order_id)
+    publish(
+        topic="subtract.stock",
+        key=message.order_id,
+        value=message,
+    )
+
+
+def handle_find_stock_reply(message: FindStockReply):
+    # todo: perform order-service reply handling logic here
+    app.logger.debug(
+        "find.stock.replies received item_id=%s found=%s stock=%s price=%s",
+        message.item_id,
+        message.found,
+        message.stock,
+        message.price,
+    )
+
+
+def handle_stock_subtracted_reply(message: StockSubtractedReply):
+    # todo: perform order-service reply handling logic here
+    app.logger.debug(
+        "subtract.stock.replies received order_id=%s",
+        message.order_id,
+    )
+
+
+def handle_message(message: BaseMessage):
+    if isinstance(message, FindStockReply):
+        handle_find_stock_reply(message)
+        return
+    if isinstance(message, StockSubtractedReply):
+        handle_stock_subtracted_reply(message)
+        return
+    app.logger.warning(f"No handler registered for message type: {message.type}")
+
+
+def consumer_loop():
+    consumer = create_consumer(
+        group_id="order-service",
+        topics=["find.stock.replies", "subtract.stock.replies"],
+    )
+
+    while True:
+        msg = consumer.poll(1.0)
+
+        if msg is None:
+            continue
+
+        if msg.error():
+            app.logger.debug(f"Kafka error: {msg.error()}")
+            continue
+
+        try:
+            message = decode_message(msg.value())
+            handle_message(message)
+            consumer.commit(message=msg)
+
+        except Exception as e:
+            app.logger.debug(f"Processing error: {e}")
+            # todo: perform retry logic here
+            # no commit -> message will be retried
 
 
 class OrderValue(Struct):

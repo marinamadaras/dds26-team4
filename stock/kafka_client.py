@@ -14,12 +14,18 @@ def publish(topic: str, key: str, value: dict):
     )
     producer.flush(2)
 
-def create_consumer(group_id: str, topics: list[str]):
+def create_consumer(
+    group_id: str,
+    topics: list[str],
+    *,
+    auto_offset_reset: str = "latest",
+    enable_auto_commit: bool = False,
+):
     consumer = Consumer({
         "bootstrap.servers": BOOTSTRAP,
         "group.id": group_id,
-        "auto.offset.reset": "earliest",
-        "enable.auto.commit": False,
+        "auto.offset.reset": auto_offset_reset,
+        "enable.auto.commit": enable_auto_commit,
     })
     consumer.subscribe(topics)
     return consumer
