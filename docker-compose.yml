@@ -58,7 +58,7 @@ services:
     environment:
       - GATEWAY_URL=http://gateway:80
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
-    command: gunicorn -b 0.0.0.0:5000 -w 1 --timeout 30 --log-level=info app:app
+    command: gunicorn -b 0.0.0.0:5000 -w 1 --timeout 30 --log-level=info app:app #todo: very important - look into the flags here for proper replication and partitioning, for each service
     env_file:
       - env/order_redis.env
     depends_on:
@@ -94,7 +94,7 @@ services:
     image: user:latest
     environment:
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
-    command: gunicorn -b 0.0.0.0:5000 -w 2 --timeout 30 --log-level=info app:app
+    command: gunicorn -b 0.0.0.0:5000 -w 1 --timeout 30 --log-level=info app:app
     env_file:
       - env/payment_redis.env
     depends_on:

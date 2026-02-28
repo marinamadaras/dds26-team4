@@ -19,6 +19,12 @@ from messages import (
     StockSubtractedReply,
     FindStock,
     FindStockReply,
+    PaymentRequest,
+    PaymentReply,
+    RollbackStockRequest,
+    RollbackStockReply,
+    RollbackPaymentRequest,
+    RollbackPaymentReply,
 )
 
 DB_ERROR_STR = "DB error"
@@ -59,11 +65,38 @@ def publish_find_stock(order_id: str, item_id: str, quantity: int):
     )
 
 
-def publish_subtract_stock(order_id: str):
-    message = SubtractStock(order_id=order_id)
+def publish_subtract_stock(order_id: str, item_id: str, quantity: int):
+    message = SubtractStock(order_id=order_id, item_id=item_id, quantity=int(quantity))
     publish(
         topic="subtract.stock",
         key=message.order_id,
+        value=message,
+    )
+
+
+def publish_payment(order_id: str, user_id: str, amount: int):
+    message = PaymentRequest(order_id=order_id, user_id=user_id, amount=int(amount))
+    publish(
+        topic="payment",
+        key=order_id,
+        value=message,
+    )
+
+
+def publish_rollback_stock(order_id: str, item_id: str, quantity: int):
+    message = RollbackStockRequest(order_id=order_id, item_id=item_id, quantity=int(quantity))
+    publish(
+        topic="rollback.stock",
+        key=order_id,
+        value=message,
+    )
+
+
+def publish_rollback_payment(order_id: str, user_id: str, amount: int):
+    message = RollbackPaymentRequest(order_id=order_id, user_id=user_id, amount=int(amount))
+    publish(
+        topic="rollback.payment",
+        key=order_id,
         value=message,
     )
 
@@ -99,10 +132,31 @@ def handle_find_stock_reply(message: FindStockReply):
 
 
 def handle_stock_subtracted_reply(message: StockSubtractedReply):
-    # todo: perform order-service reply handling logic here
-    app.logger.debug(
-        "subtract.stock.replies received order_id=%s",
+    # todo: implement with sagas, we need to keep track of all pending items somehow
+    # since we are async, we send multiple requests to the stock service for each item
+    # and we can only proceed with the payment when we have received all of them
+    app.logger.info("stock subtracted not yet implemented", message.order_id)
+
+
+def handle_payment_reply(message: PaymentReply):
+    # todo: implement with sagas, we need to keep track of all pending checkouts somehow
+    app.logger.info("stock subtracted not yet implemented", message.order_id)
+
+
+def handle_rollback_stock_reply(message: RollbackStockReply):
+    app.logger.info(
+        "rollback.stock.replies received order_id=%s item_id=%s success=%s",
         message.order_id,
+        message.item_id,
+        message.success,
+    )
+
+def handle_rollback_payment_reply(message: RollbackPaymentReply):
+    app.logger.info(
+        "rollback.payment.replies received order_id=%s user_id=%s success=%s",
+        message.order_id,
+        message.user_id,
+        message.success,
     )
 
 
@@ -113,14 +167,29 @@ def handle_message(message: BaseMessage):
     if isinstance(message, StockSubtractedReply):
         handle_stock_subtracted_reply(message)
         return
+    if isinstance(message, PaymentReply):
+        handle_payment_reply(message)
+        return
+    if isinstance(message, RollbackStockReply):
+        handle_rollback_stock_reply(message)
+        return
+    if isinstance(message, RollbackPaymentReply):
+        handle_rollback_payment_reply(message)
+        return
     app.logger.warning(f"No handler registered for message type: {message.type}")
 
 
 def consumer_loop():
     app.logger.info("order consumer loop starting")
     consumer = create_consumer(
-        group_id="order-service-v2",
-        topics=["find.stock.replies", "subtract.stock.replies"],
+        group_id="order-service",
+        topics=[
+            "find.stock.replies",
+            "subtract.stock.replies",
+            "payment.replies",
+            "rollback.stock.replies",
+            "rollback.payment.replies",
+        ],
         auto_offset_reset="earliest",
         enable_auto_commit=False,
     )
@@ -265,26 +334,29 @@ def checkout(order_id: str):
         items_quantities[item_id] += quantity
     # The removed items will contain the items that we already have successfully subtracted stock from
     # for rollback purposes.
-    removed_items: list[tuple[str, int]] = []
+    # removed_items: list[tuple[str, int]] = []
     for item_id, quantity in items_quantities.items():
-        stock_reply = send_post_request(f"{GATEWAY_URL}/stock/subtract/{item_id}/{quantity}")
-        if stock_reply.status_code != 200:
-            # If one item does not have enough stock we need to rollback
-            rollback_stock(removed_items)
-            abort(400, f'Out of stock on item_id: {item_id}')
-        removed_items.append((item_id, quantity))
-    user_reply = send_post_request(f"{GATEWAY_URL}/payment/pay/{order_entry.user_id}/{order_entry.total_cost}")
-    if user_reply.status_code != 200:
-        # If the user does not have enough credit we need to rollback all the item stock subtractions
-        rollback_stock(removed_items)
-        abort(400, "User out of credit")
-    order_entry.paid = True
-    try:
-        db.set(order_id, msgpack.encode(order_entry))
-    except redis.exceptions.RedisError:
-        return abort(400, DB_ERROR_STR)
-    app.logger.debug("Checkout successful")
-    return Response("Checkout successful", status=200)
+        publish_subtract_stock(order_id, item_id, quantity)
+    return Response("Checkout stock subtraction requested asynchronously", status=202)
+
+    #     stock_reply = send_post_request(f"{GATEWAY_URL}/stock/subtract/{item_id}/{quantity}")
+    #     if stock_reply.status_code != 200:
+    #         # If one item does not have enough stock we need to rollback
+    #         rollback_stock(removed_items)
+    #         abort(400, f'Out of stock on item_id: {item_id}')
+    #     removed_items.append((item_id, quantity))
+    # user_reply = send_post_request(f"{GATEWAY_URL}/payment/pay/{order_entry.user_id}/{order_entry.total_cost}")
+    # if user_reply.status_code != 200:
+    #     # If the user does not have enough credit we need to rollback all the item stock subtractions
+    #     rollback_stock(removed_items)
+    #     abort(400, "User out of credit")
+    # order_entry.paid = True
+    # try:
+    #     db.set(order_id, msgpack.encode(order_entry))
+    # except redis.exceptions.RedisError:
+    #     return abort(400, DB_ERROR_STR)
+    # app.logger.debug("Checkout successful")
+    # return Response("Checkout successful", status=200)
 
 
 if __name__ == '__main__':

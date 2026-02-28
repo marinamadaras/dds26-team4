@@ -9,7 +9,15 @@ import redis
 from msgspec import msgpack, Struct
 from flask import Flask, jsonify, abort, Response
 from kafka_client import publish, create_consumer, decode_message
-from messages import BaseMessage, FindStock, FindStockReply
+from messages import (
+    BaseMessage,
+    FindStock,
+    FindStockReply,
+    SubtractStock,
+    StockSubtractedReply,
+    RollbackStockRequest,
+    RollbackStockReply,
+)
 
 
 DB_ERROR_STR = "DB error"
@@ -57,6 +65,19 @@ def get_item_from_db_nullable(item_id: str) -> StockValue | None:
     return msgpack.decode(entry, type=StockValue) if entry else None
 
 
+def subtract_stock_core(item_id: str, amount: int) -> StockValue:
+    item_entry: StockValue = get_item_from_db(item_id)
+    item_entry.stock -= int(amount)
+    app.logger.debug(f"Item: {item_id} stock updated to: {item_entry.stock}")
+    if item_entry.stock < 0:
+        raise ValueError(f"Item: {item_id} stock cannot get reduced below zero!")
+    try:
+        db.set(item_id, msgpack.encode(item_entry))
+    except redis.exceptions.RedisError as e:
+        raise RuntimeError(DB_ERROR_STR) from e
+    return item_entry
+
+
 def handle_find_stock(message: FindStock, order_id: str):
     app.logger.info("received find.stock request order_id=%s item_id=%s qty=%s", order_id, message.item_id, message.quantity)
     item_entry = get_item_from_db_nullable(message.item_id)
@@ -89,14 +110,59 @@ def handle_message(message: BaseMessage, key: str):
     if isinstance(message, FindStock):
         handle_find_stock(message, key)
         return
+    if isinstance(message, SubtractStock):
+        handle_subtract_stock(message)
+        return
+    if isinstance(message, RollbackStockRequest):
+        handle_rollback_stock(message)
+        return
     app.logger.warning(f"No handler registered for message type: {message.type}")
 
+
+def handle_subtract_stock(message: SubtractStock):
+    try:
+        subtract_stock_core(message.item_id, int(message.quantity))
+        reply = StockSubtractedReply(
+            order_id=message.order_id,
+            item_id=message.item_id,
+            quantity=message.quantity,
+            success=True,
+        )
+    except Exception as e:
+        reply = StockSubtractedReply(
+            order_id=message.order_id,
+            item_id=message.item_id,
+            quantity=message.quantity,
+            success=False,
+            error=str(e),
+        )
+
+    publish(
+        topic="subtract.stock.replies",
+        key=message.order_id,
+        value=reply,
+    )
+
+# todo: implement stock rollback logic and adapt the reply down here
+def handle_rollback_stock(message: RollbackStockRequest):
+    reply = RollbackStockReply(
+        order_id=message.order_id,
+        item_id=message.item_id,
+        quantity=message.quantity,
+        success=False,
+        error="rollback stock not implemented",
+    )
+    publish(
+        topic="rollback.stock.replies",
+        key=message.order_id,
+        value=reply,
+    )
 
 def consumer_loop():
     app.logger.info("stock consumer loop starting")
     consumer = create_consumer(
-        group_id="stock-service-v2",
-        topics=["find.stock"],
+        group_id="stock-service",
+        topics=["find.stock", "subtract.stock", "rollback.stock"],
         auto_offset_reset="earliest",
         enable_auto_commit=False,
     )
@@ -180,15 +246,11 @@ def add_stock(item_id: str, amount: int):
 
 @app.post('/subtract/<item_id>/<amount>')
 def remove_stock(item_id: str, amount: int):
-    item_entry: StockValue = get_item_from_db(item_id)
-    # update stock, serialize and update database
-    item_entry.stock -= int(amount)
-    app.logger.debug(f"Item: {item_id} stock updated to: {item_entry.stock}")
-    if item_entry.stock < 0:
-        abort(400, f"Item: {item_id} stock cannot get reduced below zero!")
     try:
-        db.set(item_id, msgpack.encode(item_entry))
-    except redis.exceptions.RedisError:
+        item_entry = subtract_stock_core(item_id, int(amount))
+    except ValueError as e:
+        abort(400, str(e))
+    except RuntimeError:
         return abort(400, DB_ERROR_STR)
     return Response(f"Item: {item_id} stock updated to: {item_entry.stock}", status=200)
 

@@ -23,7 +23,43 @@ class FindStock(BaseMessage):
     type: str = "FindStock"
 
 
+class SubtractStock(BaseMessage):
+    order_id: str
+    item_id: str
+    quantity: int
+    type: str = "SubtractStock"
+
+
+class StockSubtractedReply(BaseMessage):
+    order_id: str
+    item_id: str
+    quantity: int
+    success: bool
+    error: str | None = None
+    type: str = "StockSubtractedReply"
+
+
+class RollbackStockRequest(BaseMessage):
+    order_id: str
+    item_id: str
+    quantity: int
+    type: str = "RollbackStockRequest"
+
+
+class RollbackStockReply(BaseMessage):
+    order_id: str
+    item_id: str
+    quantity: int
+    success: bool
+    error: str | None = None
+    type: str = "RollbackStockReply"
+
+
 MESSAGE_TYPES: dict[str, type[BaseMessage]] = {
     "FindStock": FindStock,
     "FindStockReply": FindStockReply,
+    "SubtractStock": SubtractStock,
+    "StockSubtractedReply": StockSubtractedReply,
+    "RollbackStockRequest": RollbackStockRequest,
+    "RollbackStockReply": RollbackStockReply,
 }
