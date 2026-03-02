@@ -45,7 +45,6 @@ db: redis.Redis = redis.Redis(host=os.environ['REDIS_HOST'],
 
 ORDER_CREATED = "CREATED"
 STOCK_RESERVED = "STOCK_RESERVED"
-PAYMENT_COMPLETED = "PAYMENT_COMPLETED"
 ORDER_COMPLETED = "COMPLETED"
 ORDER_CANCELLED = "CANCELLED"
 
@@ -465,15 +464,6 @@ def checkout(order_id: str):
             return abort(400, DB_ERROR_STR)
         abort(400, "User out of credit")
 
-    # Successfully paid (Maybe this is unnecessary)
-    order.status = PAYMENT_COMPLETED
-    try:
-        db.set(order_id, msgpack.encode(order))
-    except redis.exceptions.RedisError:
-        refund_payment(order.user_id, order.total_cost)
-        rollback_stock(removed_items)
-        abort(400, DB_ERROR_STR)
-        return abort(400, DB_ERROR_STR)
 
     # ORDER COMPLETED
     order.status = ORDER_COMPLETED
