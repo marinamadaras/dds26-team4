@@ -41,7 +41,9 @@ db: redis.Redis = redis.Redis(host=os.environ['REDIS_HOST'],
                               db=int(os.environ['REDIS_DB']))
 
 ORDER_CREATED = "CREATED"
+STOCK_PENDING = "STOCK_PENDING"
 STOCK_RESERVED = "STOCK_RESERVED"
+PAYMENT_PENDING = "PAYMENT_PENDING"
 ORDER_COMPLETED = "COMPLETED"
 ORDER_CANCELLED = "CANCELLED"
 
@@ -113,6 +115,7 @@ def handle_find_stock_reply(message: FindStockReply):
             f"Stock not found for item {message.item_id} in order {message.order_id}"
         )
         return  # nothing to update
+        # Shouldn't we throw error or something
 
     try:
         order_entry: OrderValue = get_order_from_db(message.order_id)
@@ -136,16 +139,76 @@ def handle_find_stock_reply(message: FindStockReply):
         raise  # todo: let consumer retry?
 
 
+
 def handle_stock_subtracted_reply(message: StockSubtractedReply):
-    # todo: implement with sagas, we need to keep track of all pending items somehow
-    # since we are async, we send multiple requests to the stock service for each item
-    # and we can only proceed with the payment when we have received all of them
-    app.logger.info("stock subtracted not yet implemented", message.order_id)
+    order_id = message.order_id
+    order = get_order_from_db(order_id)
+
+    if order.status != STOCK_PENDING:
+        return
+
+    if not message.success:
+        order.status = ORDER_CANCELLED
+        db.set(order_id, msgpack.encode(order))
+        return
+
+    order.stock_confirmations += 1
+
+    if order.stock_confirmations == order.expected_items:
+        order.status = PAYMENT_PENDING
+        db.set(order_id, msgpack.encode(order))
+
+        publish_payment(
+            order_id,
+            order.user_id,
+            order.total_cost
+        )
+    else:
+        db.set(order_id, msgpack.encode(order))
+
 
 
 def handle_payment_reply(message: PaymentReply):
-    # todo: implement with sagas, we need to keep track of all pending checkouts somehow
-    app.logger.info("stock subtracted not yet implemented", message.order_id)
+    app.logger.info("payment reply received order_id=%s success=%s",
+                    message.order_id, message.success)
+
+    order_id = message.order_id
+
+    order = get_order_from_db(order_id)
+
+    if order.status != PAYMENT_PENDING:
+        return
+
+    if message.success:
+        try:
+            order.status = ORDER_COMPLETED
+            db.set(order_id, msgpack.encode(order))
+        except Exception as e:
+            app.logger.error("DB failure after payment → refunding : %s", e)
+
+            # Refund payment
+            publish_rollback_payment(
+                message.order_id,
+                order.user_id,
+                order.total_cost
+            )
+
+            # Rollback stock
+            for item_id, quantity in order.items:
+                publish_rollback_stock(message.order_id, item_id, quantity)
+
+            abort(400, DB_ERROR_STR)
+
+        app.logger.info("Order completed: %s", order_id)
+
+    else:
+        order.status = ORDER_CANCELLED
+        db.set(order_id, msgpack.encode(order))
+
+        for item_id, quantity in order.items:
+            publish_rollback_stock(order_id, item_id, quantity)
+
+        app.logger.info("Payment failed, stock rollback started")
 
 
 def handle_rollback_stock_reply(message: RollbackStockReply):
@@ -228,6 +291,8 @@ class OrderValue(Struct):
     items: list[tuple[str, int]]
     user_id: str
     total_cost: int
+    expected_items: int
+    stock_confirmations: int
 
 
 def get_order_from_db(order_id: str) -> OrderValue | None:
@@ -247,7 +312,8 @@ def get_order_from_db(order_id: str) -> OrderValue | None:
 @app.post('/create/<user_id>')
 def create_order(user_id: str):
     key = str(uuid.uuid4())
-    value = msgpack.encode(OrderValue(status=ORDER_CREATED, items=[], user_id=user_id, total_cost=0))
+    value = msgpack.encode(OrderValue(status=ORDER_CREATED, items=[], user_id=user_id, total_cost=0,expected_items=0,
+            stock_confirmations=0))
     try:
         db.set(key, value)
     except redis.exceptions.RedisError:
@@ -325,17 +391,6 @@ def add_item(order_id: str, item_id: str, quantity: int):
     )
 
 
-
-def rollback_stock(removed_items: list[tuple[str, int]]):
-    for item_id, quantity in removed_items:
-        send_post_request(f"{GATEWAY_URL}/stock/add/{item_id}/{quantity}")
-
-# This is for refunding money to the user if something fails after payment was made
-# If we keep it, it needs to become idempotent
-def refund_payment(user_id: str, amount: int):
-    app.logger.debug(f"Refunding {amount} to user {user_id}")
-    send_post_request(f"{GATEWAY_URL}/payment/refund/{user_id}/{amount}")
-
 @app.post('/checkout/<order_id>')
 def checkout(order_id: str):
     app.logger.debug(f"Checking out {order_id}")
@@ -345,38 +400,24 @@ def checkout(order_id: str):
     if order.status != ORDER_CREATED:
         return Response(f"Order already processed: {order.status}", status=200)
 
-    # STOCK
     # get the quantity per item
     items_quantities: dict[str, int] = defaultdict(int)
     for item_id, quantity in order_entry.items:
         items_quantities[item_id] += quantity
 
-    # The removed items will contain the items that we already have successfully subtracted stock from
-    # for rollback purposes.
+    # Update order state
+    order.expected_items = len(items_quantities)
+    order.stock_confirmations = 0
+    order.status = STOCK_PENDING
+    try:
+        db.set(order_id, msgpack.encode(order))
+    except redis.exceptions.RedisError:
+        return abort(400, DB_ERROR_STR)
 
-    # removed_items: list[tuple[str, int]] = []
     for item_id, quantity in items_quantities.items():
         publish_subtract_stock(order_id, item_id, quantity)
     return Response("Checkout stock subtraction requested asynchronously", status=202)
 
-    #     stock_reply = send_post_request(f"{GATEWAY_URL}/stock/subtract/{item_id}/{quantity}")
-    #     if stock_reply.status_code != 200:
-    #         # If one item does not have enough stock we need to rollback
-    #         rollback_stock(removed_items)
-    #         abort(400, f'Out of stock on item_id: {item_id}')
-    #     removed_items.append((item_id, quantity))
-    # user_reply = send_post_request(f"{GATEWAY_URL}/payment/pay/{order_entry.user_id}/{order_entry.total_cost}")
-    # if user_reply.status_code != 200:
-    #     # If the user does not have enough credit we need to rollback all the item stock subtractions
-    #     rollback_stock(removed_items)
-    #     abort(400, "User out of credit")
-    # order_entry.paid = True
-    # try:
-    #     db.set(order_id, msgpack.encode(order_entry))
-    # except redis.exceptions.RedisError:
-    #     return abort(400, DB_ERROR_STR)
-    # app.logger.debug("Checkout successful")
-    # return Response("Checkout successful", status=200)
 
 
 
