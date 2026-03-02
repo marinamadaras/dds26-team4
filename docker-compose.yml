@@ -1,6 +1,4 @@
-version: "3"
 services:
-
   gateway:
     image: nginx:1.25-bookworm
     volumes:
@@ -12,16 +10,62 @@ services:
       - stock-service
       - payment-service
 
+  kafka:
+    image: apache/kafka:latest
+    hostname: kafka
+    container_name: kafka
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_NODE_ID: 1
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:29093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_LISTENERS: PLAINTEXT://kafka:29092,CONTROLLER://kafka:29093,PLAINTEXT_HOST://0.0.0.0:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+
+      KAFKA_LOG_DIRS: /tmp/kraft-combined-logs
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+    healthcheck:
+      test: [ "CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server kafka:29092 >/dev/null 2>&1" ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  kafka-init:
+    image: apache/kafka:latest
+    depends_on:
+      kafka:
+        condition: service_healthy
+    volumes:
+      - ./kafka/init-topics.sh:/init-topics.sh
+      - ./kafka/topics.txt:/topics.txt
+    entrypoint: [ "/bin/bash", "/init-topics.sh" ]
+
   order-service:
     build: ./order
     image: order:latest
     environment:
       - GATEWAY_URL=http://gateway:80
-    command: gunicorn -b 0.0.0.0:5000 -w 2 --timeout 30 --log-level=info app:app
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+    command: gunicorn -b 0.0.0.0:5000 -w 1 --timeout 30 --log-level=info app:app #todo: very important - look into the flags here for proper replication and partitioning, for each service
     env_file:
       - env/order_redis.env
     depends_on:
-      - order-db
+      order-db:
+        condition: service_started
+      kafka:
+        condition: service_healthy
 
   order-db:
     image: redis:7.2-bookworm
@@ -30,11 +74,16 @@ services:
   stock-service:
     build: ./stock
     image: stock:latest
-    command: gunicorn -b 0.0.0.0:5000 -w 2 --timeout 30 --log-level=info app:app
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+    command: gunicorn -b 0.0.0.0:5000 -w 1 --timeout 30 --log-level=info app:app
     env_file:
       - env/stock_redis.env
     depends_on:
-      - stock-db
+      stock-db:
+        condition: service_started
+      kafka:
+        condition: service_healthy
 
   stock-db:
     image: redis:7.2-bookworm
@@ -43,11 +92,16 @@ services:
   payment-service:
     build: ./payment
     image: user:latest
-    command: gunicorn -b 0.0.0.0:5000 -w 2 --timeout 30 --log-level=info app:app
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+    command: gunicorn -b 0.0.0.0:5000 -w 1 --timeout 30 --log-level=info app:app
     env_file:
       - env/payment_redis.env
     depends_on:
-      - payment-db
+      payment-db:
+        condition: service_started
+      kafka:
+        condition: service_healthy
 
   payment-db:
     image: redis:7.2-bookworm

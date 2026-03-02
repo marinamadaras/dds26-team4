@@ -1,0 +1,10 @@
+find.stock
+find.stock.replies
+subtract.stock
+subtract.stock.replies
+rollback.stock
+rollback.stock.replies
+payment
+payment.replies
+rollback.payment
+rollback.payment.replies
