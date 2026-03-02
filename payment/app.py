@@ -45,6 +45,35 @@ class UserValue(Struct):
     credit: int
 
 
+class IdempotentReplyRecord(Struct):
+    success: bool
+    error: str | None = None
+
+
+def operation_record_key(idempotency_key: str) -> str:
+    return f"_idem:{idempotency_key}"
+
+
+def get_operation_record(idempotency_key: str) -> IdempotentReplyRecord | None:
+    if not idempotency_key:
+        return None
+    try:
+        raw = db.get(operation_record_key(idempotency_key))
+    except redis.exceptions.RedisError as e:
+        raise RuntimeError(DB_ERROR_STR) from e
+    return msgpack.decode(raw, type=IdempotentReplyRecord) if raw else None
+
+
+def store_operation_record(idempotency_key: str, success: bool, error: str | None):
+    if not idempotency_key:
+        return
+    record = IdempotentReplyRecord(success=success, error=error)
+    try:
+        db.set(operation_record_key(idempotency_key), msgpack.encode(record))
+    except redis.exceptions.RedisError as e:
+        raise RuntimeError(DB_ERROR_STR) from e
+
+
 def get_user_from_db(user_id: str) -> UserValue | None:
     try:
         # get serialized data
@@ -73,16 +102,34 @@ def remove_credit_core(user_id: str, amount: int) -> UserValue:
 
 
 def handle_payment_request(message: PaymentRequest):
-    try:
-        remove_credit_core(message.user_id, int(message.amount))
+    cached = get_operation_record(message.idempotency_key)
+    if cached is not None and cached.success: ## do not retry an operation if it was succesfull the first time
         reply = PaymentReply(
+            idempotency_key=message.idempotency_key,
+            order_id=message.order_id,
+            user_id=message.user_id,
+            amount=message.amount,
+            success=cached.success,
+            error=cached.error,
+        )
+        publish(topic="payment.replies", key=message.order_id, value=reply)
+        return
+
+    try:
+        # subtract money and log that you have subtracted money
+        remove_credit_core(message.user_id, int(message.amount))
+        store_operation_record(message.idempotency_key, True, None)
+        reply = PaymentReply(
+            idempotency_key=message.idempotency_key,
             order_id=message.order_id,
             user_id=message.user_id,
             amount=message.amount,
             success=True,
         )
     except Exception as e:
+        store_operation_record(message.idempotency_key, False, str(e))
         reply = PaymentReply(
+            idempotency_key=message.idempotency_key,
             order_id=message.order_id,
             user_id=message.user_id,
             amount=message.amount,
@@ -142,7 +189,22 @@ def handle_http_command(command: dict):
 
 # todo: implement payment rollback logic and adapt the reply down here
 def handle_rollback_payment_request(message: RollbackPaymentRequest):
+    cached = get_operation_record(message.idempotency_key)
+    if cached is not None and cached.success:
+        reply = RollbackPaymentReply(
+            idempotency_key=message.idempotency_key,
+            order_id=message.order_id,
+            user_id=message.user_id,
+            amount=message.amount,
+            success=cached.success,
+            error=cached.error,
+        )
+        publish(topic="rollback.payment.replies", key=message.order_id, value=reply)
+        return
+
+    store_operation_record(message.idempotency_key, False, "rollback payment not implemented")
     reply = RollbackPaymentReply(
+        idempotency_key=message.idempotency_key,
         order_id=message.order_id,
         user_id=message.user_id,
         amount=message.amount,
@@ -277,10 +339,12 @@ def refund(user_id: str, amount: int):
 
 
 if __name__ == '__main__':
-    start_consumer()
+    if os.getenv("DISABLE_KAFKA_CONSUMER") != "1":
+        start_consumer()
     app.run(host="0.0.0.0", port=8000, debug=True)
 else:
-    start_consumer()
+    if os.getenv("DISABLE_KAFKA_CONSUMER") != "1":
+        start_consumer()
     gunicorn_logger = logging.getLogger('gunicorn.error')
     app.logger.handlers = gunicorn_logger.handlers
     app.logger.setLevel(gunicorn_logger.level)

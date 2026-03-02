@@ -6,6 +6,7 @@ class BaseMessage(msgspec.Struct, kw_only=True):
 
 
 class PaymentRequest(BaseMessage):
+    idempotency_key: str = ""
     order_id: str
     user_id: str
     amount: int
@@ -13,6 +14,7 @@ class PaymentRequest(BaseMessage):
 
 
 class PaymentReply(BaseMessage):
+    idempotency_key: str = ""
     order_id: str
     user_id: str
     amount: int
@@ -22,6 +24,7 @@ class PaymentReply(BaseMessage):
 
 
 class RollbackPaymentRequest(BaseMessage):
+    idempotency_key: str = ""
     order_id: str
     user_id: str
     amount: int
@@ -29,6 +32,7 @@ class RollbackPaymentRequest(BaseMessage):
 
 
 class RollbackPaymentReply(BaseMessage):
+    idempotency_key: str = ""
     order_id: str
     user_id: str
     amount: int

@@ -7,18 +7,21 @@ class BaseMessage(msgspec.Struct, kw_only=True):
 
 # outgoing messages from Order service
 class FindStock(BaseMessage):
+    idempotency_key: str = ""
     item_id: str
     quantity: int
     type: str = "FindStock"
 
 
 class SubtractStock(BaseMessage):
+    idempotency_key: str = ""
     order_id: str
     item_id: str
     quantity: int
     type: str = "SubtractStock"
 
 class PaymentRequest(BaseMessage):
+    idempotency_key: str = ""
     order_id: str
     user_id: str
     amount: int
@@ -26,6 +29,7 @@ class PaymentRequest(BaseMessage):
 
 
 class RollbackStockRequest(BaseMessage):
+    idempotency_key: str = ""
     order_id: str
     item_id: str
     quantity: int
@@ -33,6 +37,7 @@ class RollbackStockRequest(BaseMessage):
 
 
 class RollbackPaymentRequest(BaseMessage):
+    idempotency_key: str = ""
     order_id: str
     user_id: str
     amount: int
@@ -101,6 +106,7 @@ class PaymentDecisionReply(BaseMessage):
 
 # incoming message to Order service
 class FindStockReply(BaseMessage):
+    idempotency_key: str = ""
     order_id: str
     item_id: str
     found: bool
@@ -111,6 +117,7 @@ class FindStockReply(BaseMessage):
 
 
 class StockSubtractedReply(BaseMessage):
+    idempotency_key: str = ""
     order_id: str
     item_id: str
     quantity: int
@@ -119,6 +126,7 @@ class StockSubtractedReply(BaseMessage):
     type: str = "StockSubtractedReply"
 
 class PaymentReply(BaseMessage):
+    idempotency_key: str = ""
     order_id: str
     user_id: str
     amount: int
@@ -128,6 +136,7 @@ class PaymentReply(BaseMessage):
 
 
 class RollbackStockReply(BaseMessage):
+    idempotency_key: str = ""
     order_id: str
     item_id: str
     quantity: int
@@ -137,6 +146,7 @@ class RollbackStockReply(BaseMessage):
 
 
 class RollbackPaymentReply(BaseMessage):
+    idempotency_key: str = ""
     order_id: str
     user_id: str
     amount: int

@@ -48,6 +48,35 @@ class StockValue(Struct):
     price: int
 
 
+class IdempotentReplyRecord(Struct):
+    success: bool
+    error: str | None = None
+
+
+def operation_record_key(idempotency_key: str) -> str:
+    return f"_idem:{idempotency_key}"
+
+
+def get_operation_record(idempotency_key: str) -> IdempotentReplyRecord | None:
+    if not idempotency_key:
+        return None
+    try:
+        raw = db.get(operation_record_key(idempotency_key))
+    except redis.exceptions.RedisError as e:
+        raise RuntimeError(DB_ERROR_STR) from e
+    return msgpack.decode(raw, type=IdempotentReplyRecord) if raw else None
+
+
+def store_operation_record(idempotency_key: str, success: bool, error: str | None):
+    if not idempotency_key:
+        return
+    record = IdempotentReplyRecord(success=success, error=error)
+    try:
+        db.set(operation_record_key(idempotency_key), msgpack.encode(record))
+    except redis.exceptions.RedisError as e:
+        raise RuntimeError(DB_ERROR_STR) from e
+
+
 def get_item_from_db(item_id: str) -> StockValue | None:
     # get serialized data
     try:
@@ -88,6 +117,7 @@ def handle_find_stock(message: FindStock, order_id: str):
     item_entry = get_item_from_db_nullable(message.item_id)
     if item_entry is None:
         reply = FindStockReply(
+            idempotency_key=message.idempotency_key,
             order_id=order_id,
             item_id=message.item_id,
             quantity=message.quantity,
@@ -95,6 +125,7 @@ def handle_find_stock(message: FindStock, order_id: str):
         )
     else:
         reply = FindStockReply(
+            idempotency_key=message.idempotency_key,
             order_id=order_id,
             item_id=message.item_id,
             quantity=message.quantity,
@@ -163,16 +194,33 @@ def handle_http_command(command: dict):
 
 
 def handle_subtract_stock(message: SubtractStock):
+    cached = get_operation_record(message.idempotency_key)
+    if cached is not None and cached.success:
+        reply = StockSubtractedReply(
+            idempotency_key=message.idempotency_key,
+            order_id=message.order_id,
+            item_id=message.item_id,
+            quantity=message.quantity,
+            success=cached.success,
+            error=cached.error,
+        )
+        publish(topic="subtract.stock.replies", key=message.order_id, value=reply)
+        return
+
     try:
         subtract_stock_core(message.item_id, int(message.quantity))
+        store_operation_record(message.idempotency_key, True, None)
         reply = StockSubtractedReply(
+            idempotency_key=message.idempotency_key,
             order_id=message.order_id,
             item_id=message.item_id,
             quantity=message.quantity,
             success=True,
         )
     except Exception as e:
+        store_operation_record(message.idempotency_key, False, str(e))
         reply = StockSubtractedReply(
+            idempotency_key=message.idempotency_key,
             order_id=message.order_id,
             item_id=message.item_id,
             quantity=message.quantity,
@@ -188,7 +236,22 @@ def handle_subtract_stock(message: SubtractStock):
 
 # todo: implement stock rollback logic and adapt the reply down here
 def handle_rollback_stock(message: RollbackStockRequest):
+    cached = get_operation_record(message.idempotency_key)
+    if cached is not None and cached.success:
+        reply = RollbackStockReply(
+            idempotency_key=message.idempotency_key,
+            order_id=message.order_id,
+            item_id=message.item_id,
+            quantity=message.quantity,
+            success=cached.success,
+            error=cached.error,
+        )
+        publish(topic="rollback.stock.replies", key=message.order_id, value=reply)
+        return
+
+    store_operation_record(message.idempotency_key, False, "rollback stock not implemented")
     reply = RollbackStockReply(
+        idempotency_key=message.idempotency_key,
         order_id=message.order_id,
         item_id=message.item_id,
         quantity=message.quantity,
@@ -314,10 +377,12 @@ def remove_stock(item_id: str, amount: int):
 
 
 if __name__ == '__main__':
-    start_consumer()
+    if os.getenv("DISABLE_KAFKA_CONSUMER") != "1":
+        start_consumer()
     app.run(host="0.0.0.0", port=8000, debug=True)
 else:
-    start_consumer()
+    if os.getenv("DISABLE_KAFKA_CONSUMER") != "1":
+        start_consumer()
     gunicorn_logger = logging.getLogger('gunicorn.error')
     app.logger.handlers = gunicorn_logger.handlers
     app.logger.setLevel(gunicorn_logger.level)
