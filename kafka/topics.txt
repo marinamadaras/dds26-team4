@@ -8,3 +8,4 @@ payment
 payment.replies
 rollback.payment
 rollback.payment.replies
+checkout.requested

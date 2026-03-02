@@ -38,6 +38,12 @@ class RollbackPaymentRequest(BaseMessage):
     amount: int
     type: str = "RollbackPaymentRequest"
 
+
+class CheckoutRequested(BaseMessage):
+    order_id: str
+    type: str = "CheckoutRequested"
+
+
 # incoming message to Order service
 class FindStockReply(BaseMessage):
     order_id: str
@@ -95,4 +101,5 @@ MESSAGE_TYPES: dict[str, type[BaseMessage]] = {
     "RollbackStockReply": RollbackStockReply,
     "RollbackPaymentRequest": RollbackPaymentRequest,
     "RollbackPaymentReply": RollbackPaymentReply,
+    "CheckoutRequested": CheckoutRequested,
 }

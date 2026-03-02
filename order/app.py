@@ -26,6 +26,7 @@ from messages import (
     RollbackStockReply,
     RollbackPaymentRequest,
     RollbackPaymentReply,
+    CheckoutRequested,
 )
 
 DB_ERROR_STR = "DB error"
@@ -102,6 +103,15 @@ def publish_rollback_payment(order_id: str, user_id: str, amount: int):
     )
 
 
+def publish_checkout_requested(order_id: str):
+    message = CheckoutRequested(order_id=order_id)
+    publish(
+        topic="checkout.requested",
+        key=order_id,
+        value=message,
+    )
+
+
 def handle_find_stock_reply(message: FindStockReply):
     app.logger.info(f"received find stock reply: {message.order_id}")
     if not message.found:
@@ -161,9 +171,16 @@ def handle_rollback_payment_reply(message: RollbackPaymentReply):
     )
 
 
+def handle_checkout_requested(message: CheckoutRequested):
+    process_checkout_async(message.order_id)
+
+
 def handle_message(message: BaseMessage):
     if isinstance(message, FindStockReply):
         handle_find_stock_reply(message)
+        return
+    if isinstance(message, CheckoutRequested):
+        handle_checkout_requested(message)
         return
     if isinstance(message, StockSubtractedReply):
         handle_stock_subtracted_reply(message)
@@ -185,6 +202,7 @@ def consumer_loop():
     consumer = create_consumer(
         group_id="order-service",
         topics=[
+            "checkout.requested",
             "find.stock.replies",
             "subtract.stock.replies",
             "payment.replies",
@@ -300,6 +318,31 @@ def send_get_request(url: str):
         return response
 
 
+def checkout_lock_key(order_id: str) -> str:
+    return f"checkout:lock:{order_id}"
+
+
+def try_acquire_checkout_lock(order_id: str) -> bool:
+    try:
+        return bool(db.set(checkout_lock_key(order_id), "1", ex=60, nx=True))
+    except redis.exceptions.RedisError:
+        return False
+
+
+def release_checkout_lock(order_id: str):
+    try:
+        db.delete(checkout_lock_key(order_id))
+    except redis.exceptions.RedisError:
+        app.logger.warning("Failed to release checkout lock for order %s", order_id)
+
+
+def is_checkout_in_progress(order_id: str) -> bool:
+    try:
+        return bool(db.exists(checkout_lock_key(order_id)))
+    except redis.exceptions.RedisError:
+        return False
+
+
 def execute_decision(tx_id: str, tx: CheckoutTransaction) -> bool:
     # Phase 2: fan out the already-persisted decision to all participants.
     if tx.decision == "COMMIT":
@@ -380,6 +423,72 @@ def recover_in_doubt_transactions():
             finalize_transaction(tx_id, tx)
 
 
+def process_checkout_async(order_id: str):
+    if not try_acquire_checkout_lock(order_id):
+        app.logger.info("checkout already in progress for order=%s", order_id)
+        return
+# protected
+    try:
+        order_entry = get_order_if_exists(order_id)
+        if order_entry is None:
+            app.logger.warning("async checkout ignored: order %s not found", order_id)
+            return
+        if order_entry.paid:
+            app.logger.info("async checkout skipped: order %s already paid", order_id)
+            return
+
+#create tx
+        tx_id = str(uuid.uuid4())
+        items = aggregate_items(order_entry.items)
+        tx = CheckoutTransaction(
+            state="PREPARING",
+            decision="UNKNOWN",
+            order_id=order_id,
+            user_id=order_entry.user_id,
+            total_cost=order_entry.total_cost,
+            items=items
+        )
+        #store db
+        set_tx(tx_id, tx)
+
+#start 2pc  
+        stock_prepare_reply = send_post_request(
+            f"{GATEWAY_URL}/stock/prepare/{tx_id}",
+            {"items": items}
+        )
+        payment_prepare_reply = send_post_request(
+            f"{GATEWAY_URL}/payment/prepare/{tx_id}",
+            {"user_id": order_entry.user_id, "amount": order_entry.total_cost}
+        )
+
+        prepare_success = (
+            stock_prepare_reply is not None
+            and payment_prepare_reply is not None
+            and stock_prepare_reply.status_code == 200
+            and payment_prepare_reply.status_code == 200
+        )
+
+        if prepare_success:
+            tx.decision = "COMMIT"
+            tx.state = "DECIDED"
+            set_tx(tx_id, tx)
+            if not finalize_transaction(tx_id, tx):
+                app.logger.error("async checkout commit pending recovery tx=%s order=%s", tx_id, order_id)
+                return
+            app.logger.info("async checkout committed order=%s tx=%s", order_id, tx_id)
+            return
+
+        tx.decision = "ABORT"
+        tx.state = "DECIDED"
+        set_tx(tx_id, tx)
+        if not finalize_transaction(tx_id, tx):
+            app.logger.error("async checkout abort pending recovery tx=%s order=%s", tx_id, order_id)
+            return
+        app.logger.info("async checkout aborted order=%s tx=%s", order_id, tx_id)
+    finally:
+        release_checkout_lock(order_id)
+
+
 @app.post('/create/<user_id>')
 def create_order(user_id: str):
     key = str(uuid.uuid4())
@@ -444,64 +553,19 @@ def add_item(order_id: str, item_id: str, quantity: int):
 
 @app.post('/checkout/<order_id>')
 def checkout(order_id: str):
-    app.logger.debug(f"Checking out {order_id}")
+    app.logger.debug(f"Queueing checkout for {order_id}")
     order_entry: OrderValue = get_order_from_db(order_id)
     if order_entry.paid:
         return Response("Order already paid", status=200)
+    if is_checkout_in_progress(order_id):
+        return Response("Checkout already in progress", status=202)
 
-    # One checkout attempt corresponds to one distributed transaction id.
-    tx_id = str(uuid.uuid4())
-    items = aggregate_items(order_entry.items)
-    tx = CheckoutTransaction(
-        state="PREPARING",
-        decision="UNKNOWN",
-        order_id=order_id,
-        user_id=order_entry.user_id,
-        total_cost=order_entry.total_cost,
-        items=items
-    )
-    set_tx(tx_id, tx)
+    try:
+        publish_checkout_requested(order_id)
+    except Exception:
+        abort(503, "Failed to enqueue checkout")
 
-    # Phase 1: ask both participants to reserve resources.
-    stock_prepare_reply = send_post_request(
-        f"{GATEWAY_URL}/stock/prepare/{tx_id}",
-        {"items": items}
-    )
-    payment_prepare_reply = send_post_request(
-        f"{GATEWAY_URL}/payment/prepare/{tx_id}",
-        {"user_id": order_entry.user_id, "amount": order_entry.total_cost}
-    )
-
-    prepare_success = (
-        stock_prepare_reply is not None
-        and payment_prepare_reply is not None
-        and stock_prepare_reply.status_code == 200
-        and payment_prepare_reply.status_code == 200
-    )
-
-    if prepare_success:
-        # Persist COMMIT before issuing commit RPCs to make recovery deterministic.
-        tx.decision = "COMMIT"
-        tx.state = "DECIDED"
-        set_tx(tx_id, tx)
-        if not finalize_transaction(tx_id, tx):
-            abort(500, "Commit decision stored but finalization is pending recovery")
-        app.logger.debug("Checkout successful")
-        return Response("Checkout successful", status=200)
-
-    # Any prepare failure means global ABORT decision.
-    tx.decision = "ABORT"
-    tx.state = "DECIDED"
-    set_tx(tx_id, tx)
-
-    if not finalize_transaction(tx_id, tx):
-        abort(500, "Abort decision stored but cleanup is pending recovery")
-
-    if stock_prepare_reply is not None and stock_prepare_reply.status_code != 200:
-        return Response(f"Stock prepare failed: {stock_prepare_reply.text}", status=400)
-    if payment_prepare_reply is not None and payment_prepare_reply.status_code != 200:
-        return Response("User out of credit", status=400)
-    abort(400, REQ_ERROR_STR)
+    return Response("Checkout queued", status=202)
 
 
 recover_in_doubt_transactions()
