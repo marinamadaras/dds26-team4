@@ -51,6 +51,41 @@ ORDER_CANCELLED = "CANCELLED"
 def close_db_connection():
     db.close()
 
+
+class ReplyProcessingRecord(Struct):
+    success: bool
+
+
+def get_reply_processing_record(idempotency_key: str) -> ReplyProcessingRecord | None:
+    if not idempotency_key:
+        return None
+    record_key = f"_idem:{idempotency_key}"
+    try:
+        raw = db.get(record_key)
+    except redis.exceptions.RedisError as e:
+        raise RuntimeError(DB_ERROR_STR) from e
+    return msgpack.decode(raw, type=ReplyProcessingRecord) if raw else None
+
+
+def store_reply_processing_record(idempotency_key: str, success: bool):
+    if not idempotency_key:
+        return
+    record_key = f"_idem:{idempotency_key}"
+    record = ReplyProcessingRecord(success=success)
+    try:
+        db.set(record_key, msgpack.encode(record))
+    except redis.exceptions.RedisError as e:
+        raise RuntimeError(DB_ERROR_STR) from e
+
+
+def should_skip_reply_processing(idempotency_key: str) -> bool:
+    cached = get_reply_processing_record(idempotency_key)
+    return bool(cached is not None and cached.success) # should only ignore a reply if it was successfull
+
+
+def make_idempotency_key(order_id: str, action: str, item_id: str = "", quantity: int = 0) -> str:
+    return f"order:{order_id}:{action}:{item_id}:{int(quantity)}"
+
 def start_consumer():
     global _consumer_thread
     if _consumer_thread is not None and _consumer_thread.is_alive():
@@ -63,7 +98,11 @@ def start_consumer():
 atexit.register(close_db_connection)
 
 def publish_find_stock(order_id: str, item_id: str, quantity: int):
-    message = FindStock(item_id=item_id, quantity=int(quantity))
+    message = FindStock(
+        idempotency_key=make_idempotency_key(order_id, "find_stock", item_id, quantity),
+        item_id=item_id,
+        quantity=int(quantity),
+    )
 
     publish(
         topic="find.stock",
@@ -73,7 +112,12 @@ def publish_find_stock(order_id: str, item_id: str, quantity: int):
 
 
 def publish_subtract_stock(order_id: str, item_id: str, quantity: int):
-    message = SubtractStock(order_id=order_id, item_id=item_id, quantity=int(quantity))
+    message = SubtractStock(
+        idempotency_key=make_idempotency_key(order_id, "subtract_stock", item_id, quantity),
+        order_id=order_id,
+        item_id=item_id,
+        quantity=int(quantity),
+    )
     publish(
         topic="subtract.stock",
         key=message.order_id,
@@ -82,7 +126,12 @@ def publish_subtract_stock(order_id: str, item_id: str, quantity: int):
 
 
 def publish_payment(order_id: str, user_id: str, amount: int):
-    message = PaymentRequest(order_id=order_id, user_id=user_id, amount=int(amount))
+    message = PaymentRequest(
+        idempotency_key=make_idempotency_key(order_id, "payment_request", user_id, amount),
+        order_id=order_id,
+        user_id=user_id,
+        amount=int(amount),
+    )
     publish(
         topic="payment",
         key=order_id,
@@ -91,7 +140,12 @@ def publish_payment(order_id: str, user_id: str, amount: int):
 
 
 def publish_rollback_stock(order_id: str, item_id: str, quantity: int):
-    message = RollbackStockRequest(order_id=order_id, item_id=item_id, quantity=int(quantity))
+    message = RollbackStockRequest(
+        idempotency_key=make_idempotency_key(order_id, "rollback_stock", item_id, quantity),
+        order_id=order_id,
+        item_id=item_id,
+        quantity=int(quantity),
+    )
     publish(
         topic="rollback.stock",
         key=order_id,
@@ -100,7 +154,12 @@ def publish_rollback_stock(order_id: str, item_id: str, quantity: int):
 
 
 def publish_rollback_payment(order_id: str, user_id: str, amount: int):
-    message = RollbackPaymentRequest(order_id=order_id, user_id=user_id, amount=int(amount))
+    message = RollbackPaymentRequest(
+        idempotency_key=make_idempotency_key(order_id, "rollback_payment", user_id, amount),
+        order_id=order_id,
+        user_id=user_id,
+        amount=int(amount),
+    )
     publish(
         topic="rollback.payment",
         key=order_id,
@@ -110,7 +169,10 @@ def publish_rollback_payment(order_id: str, user_id: str, amount: int):
 
 def handle_find_stock_reply(message: FindStockReply):
     app.logger.info(f"received find stock reply: {message.order_id}")
+    if should_skip_reply_processing(message.idempotency_key):
+        return
     if not message.found:
+        store_reply_processing_record(message.idempotency_key, False)
         app.logger.warning(
             f"Stock not found for item {message.item_id} in order {message.order_id}"
         )
@@ -129,6 +191,7 @@ def handle_find_stock_reply(message: FindStockReply):
         )
 
         db.set(message.order_id, msgpack.encode(order_entry))
+        store_reply_processing_record(message.idempotency_key, True)
 
         app.logger.info(
             f"Order {message.order_id} updated asynchronously"
@@ -141,15 +204,19 @@ def handle_find_stock_reply(message: FindStockReply):
 
 
 def handle_stock_subtracted_reply(message: StockSubtractedReply):
+    if should_skip_reply_processing(message.idempotency_key):
+        return
     order_id = message.order_id
     order = get_order_from_db(order_id)
 
     if order.status != STOCK_PENDING:
+        store_reply_processing_record(message.idempotency_key, True) # this reply is no longer needed so store it as success
         return
 
     if not message.success:
         order.status = ORDER_CANCELLED
         db.set(order_id, msgpack.encode(order))
+        store_reply_processing_record(message.idempotency_key, False)
         return
 
     order.stock_confirmations += 1
@@ -163,26 +230,32 @@ def handle_stock_subtracted_reply(message: StockSubtractedReply):
             order.user_id,
             order.total_cost
         )
+        store_reply_processing_record(message.idempotency_key, True)
     else:
         db.set(order_id, msgpack.encode(order))
+        store_reply_processing_record(message.idempotency_key, True)
 
 
 
 def handle_payment_reply(message: PaymentReply):
     app.logger.info("payment reply received order_id=%s success=%s",
                     message.order_id, message.success)
+    if should_skip_reply_processing(message.idempotency_key):
+        return
 
     order_id = message.order_id
 
     order = get_order_from_db(order_id)
 
     if order.status != PAYMENT_PENDING:
+        store_reply_processing_record(message.idempotency_key, True)
         return
 
     if message.success:
         try:
             order.status = ORDER_COMPLETED
             db.set(order_id, msgpack.encode(order))
+            store_reply_processing_record(message.idempotency_key, True)
         except Exception as e:
             app.logger.error("DB failure after payment → refunding : %s", e)
 
@@ -204,6 +277,7 @@ def handle_payment_reply(message: PaymentReply):
     else:
         order.status = ORDER_CANCELLED
         db.set(order_id, msgpack.encode(order))
+        store_reply_processing_record(message.idempotency_key, False)
 
         for item_id, quantity in order.items:
             publish_rollback_stock(order_id, item_id, quantity)
@@ -212,6 +286,9 @@ def handle_payment_reply(message: PaymentReply):
 
 
 def handle_rollback_stock_reply(message: RollbackStockReply):
+    if should_skip_reply_processing(message.idempotency_key):
+        return
+    store_reply_processing_record(message.idempotency_key, message.success)
     app.logger.info(
         "rollback.stock.replies received order_id=%s item_id=%s success=%s",
         message.order_id,
@@ -220,6 +297,9 @@ def handle_rollback_stock_reply(message: RollbackStockReply):
     )
 
 def handle_rollback_payment_reply(message: RollbackPaymentReply):
+    if should_skip_reply_processing(message.idempotency_key):
+        return
+    store_reply_processing_record(message.idempotency_key, message.success)
     app.logger.info(
         "rollback.payment.replies received order_id=%s user_id=%s success=%s",
         message.order_id,
@@ -397,8 +477,8 @@ def checkout(order_id: str):
     order_entry: OrderValue = get_order_from_db(order_id)
 
     # Check if it was already processed
-    if order.status != ORDER_CREATED:
-        return Response(f"Order already processed: {order.status}", status=200)
+    if order_entry.status != ORDER_CREATED:
+        return Response(f"Order already processed: {order_entry.status}", status=200)
 
     # get the quantity per item
     items_quantities: dict[str, int] = defaultdict(int)
@@ -406,11 +486,11 @@ def checkout(order_id: str):
         items_quantities[item_id] += quantity
 
     # Update order state
-    order.expected_items = len(items_quantities)
-    order.stock_confirmations = 0
-    order.status = STOCK_PENDING
+    order_entry.expected_items = len(items_quantities)
+    order_entry.stock_confirmations = 0
+    order_entry.status = STOCK_PENDING
     try:
-        db.set(order_id, msgpack.encode(order))
+        db.set(order_id, msgpack.encode(order_entry))
     except redis.exceptions.RedisError:
         return abort(400, DB_ERROR_STR)
 
@@ -422,10 +502,12 @@ def checkout(order_id: str):
 
 
 if __name__ == '__main__':
-    start_consumer()
+    if os.getenv("DISABLE_KAFKA_CONSUMER") != "1":
+        start_consumer()
     app.run(host="0.0.0.0", port=8000, debug=True)
 else:
-    start_consumer()
+    if os.getenv("DISABLE_KAFKA_CONSUMER") != "1":
+        start_consumer()
     gunicorn_logger = logging.getLogger('gunicorn.error')
     app.logger.handlers = gunicorn_logger.handlers
     app.logger.setLevel(gunicorn_logger.level)

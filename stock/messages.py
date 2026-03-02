@@ -7,6 +7,7 @@ class BaseMessage(msgspec.Struct, kw_only=True):
 
 # outgoing messages from Stock service
 class FindStockReply(BaseMessage):
+    idempotency_key: str = ""
     order_id: str
     item_id: str
     found: bool
@@ -18,12 +19,14 @@ class FindStockReply(BaseMessage):
 
 # incoming message to Stock service
 class FindStock(BaseMessage):
+    idempotency_key: str = ""
     item_id: str
     quantity: int
     type: str = "FindStock"
 
 
 class SubtractStock(BaseMessage):
+    idempotency_key: str = ""
     order_id: str
     item_id: str
     quantity: int
@@ -31,6 +34,7 @@ class SubtractStock(BaseMessage):
 
 
 class StockSubtractedReply(BaseMessage):
+    idempotency_key: str = ""
     order_id: str
     item_id: str
     quantity: int
@@ -40,6 +44,7 @@ class StockSubtractedReply(BaseMessage):
 
 
 class RollbackStockRequest(BaseMessage):
+    idempotency_key: str = ""
     order_id: str
     item_id: str
     quantity: int
@@ -47,6 +52,7 @@ class RollbackStockRequest(BaseMessage):
 
 
 class RollbackStockReply(BaseMessage):
+    idempotency_key: str = ""
     order_id: str
     item_id: str
     quantity: int
