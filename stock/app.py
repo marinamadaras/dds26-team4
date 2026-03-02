@@ -1,6 +1,7 @@
 import logging
 import os
 import atexit
+import threading
 import uuid
 from collections import defaultdict
 
@@ -8,11 +9,22 @@ import redis
 
 from msgspec import msgpack, Struct
 from flask import Flask, jsonify, abort, Response, request
+from kafka_client import publish, create_consumer, decode_message
+from messages import (
+    BaseMessage,
+    FindStock,
+    FindStockReply,
+    SubtractStock,
+    StockSubtractedReply,
+    RollbackStockRequest,
+    RollbackStockReply,
+)
 
 
 DB_ERROR_STR = "DB error"
 
 app = Flask("stock-service")
+_consumer_thread: threading.Thread | None = None
 
 db: redis.Redis = redis.Redis(host=os.environ['REDIS_HOST'],
                               port=int(os.environ['REDIS_PORT']),
@@ -70,6 +82,144 @@ def get_stock_tx(tx_id: str) -> StockTransaction | None:
     return msgpack.decode(tx_data, type=StockTransaction) if tx_data else None
 
 
+def get_item_from_db_nullable(item_id: str) -> StockValue | None:
+    try:
+        entry: bytes = db.get(item_id)
+    except redis.exceptions.RedisError:
+        return None
+    return msgpack.decode(entry, type=StockValue) if entry else None
+
+
+def subtract_stock_core(item_id: str, amount: int) -> StockValue:
+    item_entry: StockValue = get_item_from_db(item_id)
+    item_entry.stock -= int(amount)
+    app.logger.debug(f"Item: {item_id} stock updated to: {item_entry.stock}")
+    if item_entry.stock < 0:
+        raise ValueError(f"Item: {item_id} stock cannot get reduced below zero!")
+    try:
+        db.set(item_id, msgpack.encode(item_entry))
+    except redis.exceptions.RedisError as e:
+        raise RuntimeError(DB_ERROR_STR) from e
+    return item_entry
+
+
+def handle_find_stock(message: FindStock, order_id: str):
+    app.logger.info("received find.stock request order_id=%s item_id=%s qty=%s", order_id, message.item_id, message.quantity)
+    item_entry = get_item_from_db_nullable(message.item_id)
+    if item_entry is None:
+        reply = FindStockReply(
+            order_id=order_id,
+            item_id=message.item_id,
+            quantity=message.quantity,
+            found=False,
+        )
+    else:
+        reply = FindStockReply(
+            order_id=order_id,
+            item_id=message.item_id,
+            quantity=message.quantity,
+            found=True,
+            stock=item_entry.stock,
+            price=item_entry.price,
+        )
+
+    publish(
+        topic="find.stock.replies",
+        key=order_id,
+        value=reply,
+    )
+    app.logger.info("published find.stock.replies order_id=%s item_id=%s found=%s", order_id, message.item_id, reply.found)
+
+
+def handle_message(message: BaseMessage, key: str):
+    if isinstance(message, FindStock):
+        handle_find_stock(message, key)
+        return
+    if isinstance(message, SubtractStock):
+        handle_subtract_stock(message)
+        return
+    if isinstance(message, RollbackStockRequest):
+        handle_rollback_stock(message)
+        return
+    app.logger.warning(f"No handler registered for message type: {message.type}")
+
+
+def handle_subtract_stock(message: SubtractStock):
+    try:
+        subtract_stock_core(message.item_id, int(message.quantity))
+        reply = StockSubtractedReply(
+            order_id=message.order_id,
+            item_id=message.item_id,
+            quantity=message.quantity,
+            success=True,
+        )
+    except Exception as e:
+        reply = StockSubtractedReply(
+            order_id=message.order_id,
+            item_id=message.item_id,
+            quantity=message.quantity,
+            success=False,
+            error=str(e),
+        )
+
+    publish(
+        topic="subtract.stock.replies",
+        key=message.order_id,
+        value=reply,
+    )
+
+# todo: implement stock rollback logic and adapt the reply down here
+def handle_rollback_stock(message: RollbackStockRequest):
+    reply = RollbackStockReply(
+        order_id=message.order_id,
+        item_id=message.item_id,
+        quantity=message.quantity,
+        success=False,
+        error="rollback stock not implemented",
+    )
+    publish(
+        topic="rollback.stock.replies",
+        key=message.order_id,
+        value=reply,
+    )
+
+def consumer_loop():
+    app.logger.info("stock consumer loop starting")
+    consumer = create_consumer(
+        group_id="stock-service",
+        topics=["find.stock", "subtract.stock", "rollback.stock"],
+        auto_offset_reset="earliest",
+        enable_auto_commit=False,
+    )
+    while True:
+        msg = consumer.poll(1.0)
+        if msg is None:
+            continue
+        if msg.error():
+            app.logger.error("Kafka error: %s", msg.error())
+            continue
+        try:
+            message = decode_message(msg.value())
+            key = msg.key().decode() if msg.key() else ""
+            app.logger.info("consumed topic=%s key=%s type=%s", msg.topic(), key, message.type)
+            handle_message(message, key)
+            consumer.commit(message=msg)
+        except Exception as e:
+            app.logger.exception("Processing error in stock consumer: %s", e)
+            # prevent one malformed record from blocking the partition forever
+            consumer.commit(message=msg)
+
+
+def start_consumer():
+    global _consumer_thread
+    if _consumer_thread is not None and _consumer_thread.is_alive():
+        return
+    thread = threading.Thread(target=consumer_loop, daemon=True)
+    thread.start()
+    _consumer_thread = thread
+    app.logger.info("stock consumer thread started")
+
+
 @app.post('/item/create/<price>')
 def create_item(price: int):
     key = str(uuid.uuid4())
@@ -121,15 +271,11 @@ def add_stock(item_id: str, amount: int):
 
 @app.post('/subtract/<item_id>/<amount>')
 def remove_stock(item_id: str, amount: int):
-    item_entry: StockValue = get_item_from_db(item_id)
-    # update stock, serialize and update database
-    item_entry.stock -= int(amount)
-    app.logger.debug(f"Item: {item_id} stock updated to: {item_entry.stock}")
-    if item_entry.stock < 0:
-        abort(400, f"Item: {item_id} stock cannot get reduced below zero!")
     try:
-        db.set(item_id, msgpack.encode(item_entry))
-    except redis.exceptions.RedisError:
+        item_entry = subtract_stock_core(item_id, int(amount))
+    except ValueError as e:
+        abort(400, str(e))
+    except RuntimeError:
         return abort(400, DB_ERROR_STR)
     return Response(f"Item: {item_id} stock updated to: {item_entry.stock}", status=200)
 
@@ -307,8 +453,10 @@ def abort_stock(tx_id: str):
 
 
 if __name__ == '__main__':
+    start_consumer()
     app.run(host="0.0.0.0", port=8000, debug=True)
 else:
+    start_consumer()
     gunicorn_logger = logging.getLogger('gunicorn.error')
     app.logger.handlers = gunicorn_logger.handlers
     app.logger.setLevel(gunicorn_logger.level)

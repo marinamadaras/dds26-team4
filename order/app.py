@@ -4,6 +4,7 @@ import atexit
 import random
 import uuid
 import time
+import threading
 from collections import defaultdict
 
 import redis
@@ -12,6 +13,20 @@ import requests
 from msgspec import msgpack, Struct
 from flask import Flask, jsonify, abort, Response
 
+from kafka_client import publish, create_consumer, decode_message
+from messages import (
+    BaseMessage,
+    SubtractStock,
+    StockSubtractedReply,
+    FindStock,
+    FindStockReply,
+    PaymentRequest,
+    PaymentReply,
+    RollbackStockRequest,
+    RollbackStockReply,
+    RollbackPaymentRequest,
+    RollbackPaymentReply,
+)
 
 DB_ERROR_STR = "DB error"
 REQ_ERROR_STR = "Requests error"
@@ -19,6 +34,7 @@ REQ_ERROR_STR = "Requests error"
 GATEWAY_URL = os.environ['GATEWAY_URL']
 
 app = Flask("order-service")
+_consumer_thread: threading.Thread | None = None
 
 db: redis.Redis = redis.Redis(host=os.environ['REDIS_HOST'],
                               port=int(os.environ['REDIS_PORT']),
@@ -29,8 +45,178 @@ db: redis.Redis = redis.Redis(host=os.environ['REDIS_HOST'],
 def close_db_connection():
     db.close()
 
+def start_consumer():
+    global _consumer_thread
+    if _consumer_thread is not None and _consumer_thread.is_alive():
+        return
+    thread = threading.Thread(target=consumer_loop, daemon=True)
+    thread.start()
+    _consumer_thread = thread
+    app.logger.info("order consumer thread started")
 
 atexit.register(close_db_connection)
+
+def publish_find_stock(order_id: str, item_id: str, quantity: int):
+    message = FindStock(item_id=item_id, quantity=int(quantity))
+
+    publish(
+        topic="find.stock",
+        key=order_id,
+        value=message,
+    )
+
+
+def publish_subtract_stock(order_id: str, item_id: str, quantity: int):
+    message = SubtractStock(order_id=order_id, item_id=item_id, quantity=int(quantity))
+    publish(
+        topic="subtract.stock",
+        key=message.order_id,
+        value=message,
+    )
+
+
+def publish_payment(order_id: str, user_id: str, amount: int):
+    message = PaymentRequest(order_id=order_id, user_id=user_id, amount=int(amount))
+    publish(
+        topic="payment",
+        key=order_id,
+        value=message,
+    )
+
+
+def publish_rollback_stock(order_id: str, item_id: str, quantity: int):
+    message = RollbackStockRequest(order_id=order_id, item_id=item_id, quantity=int(quantity))
+    publish(
+        topic="rollback.stock",
+        key=order_id,
+        value=message,
+    )
+
+
+def publish_rollback_payment(order_id: str, user_id: str, amount: int):
+    message = RollbackPaymentRequest(order_id=order_id, user_id=user_id, amount=int(amount))
+    publish(
+        topic="rollback.payment",
+        key=order_id,
+        value=message,
+    )
+
+
+def handle_find_stock_reply(message: FindStockReply):
+    app.logger.info(f"received find stock reply: {message.order_id}")
+    if not message.found:
+        app.logger.warning(
+            f"Stock not found for item {message.item_id} in order {message.order_id}"
+        )
+        return  # nothing to update
+
+    try:
+        order_entry: OrderValue = get_order_from_db(message.order_id)
+
+        order_entry.items.append(
+            (message.item_id, int(message.quantity))
+        )
+
+        order_entry.total_cost += (
+            int(message.quantity) * message.price
+        )
+
+        db.set(message.order_id, msgpack.encode(order_entry))
+
+        app.logger.info(
+            f"Order {message.order_id} updated asynchronously"
+        )
+
+    except redis.exceptions.RedisError as e:
+        app.logger.error(f"DB error: {e}")
+        raise  # todo: let consumer retry?
+
+
+def handle_stock_subtracted_reply(message: StockSubtractedReply):
+    # todo: implement with sagas, we need to keep track of all pending items somehow
+    # since we are async, we send multiple requests to the stock service for each item
+    # and we can only proceed with the payment when we have received all of them
+    app.logger.info("stock subtracted not yet implemented", message.order_id)
+
+
+def handle_payment_reply(message: PaymentReply):
+    # todo: implement with sagas, we need to keep track of all pending checkouts somehow
+    app.logger.info("stock subtracted not yet implemented", message.order_id)
+
+
+def handle_rollback_stock_reply(message: RollbackStockReply):
+    app.logger.info(
+        "rollback.stock.replies received order_id=%s item_id=%s success=%s",
+        message.order_id,
+        message.item_id,
+        message.success,
+    )
+
+def handle_rollback_payment_reply(message: RollbackPaymentReply):
+    app.logger.info(
+        "rollback.payment.replies received order_id=%s user_id=%s success=%s",
+        message.order_id,
+        message.user_id,
+        message.success,
+    )
+
+
+def handle_message(message: BaseMessage):
+    if isinstance(message, FindStockReply):
+        handle_find_stock_reply(message)
+        return
+    if isinstance(message, StockSubtractedReply):
+        handle_stock_subtracted_reply(message)
+        return
+    if isinstance(message, PaymentReply):
+        handle_payment_reply(message)
+        return
+    if isinstance(message, RollbackStockReply):
+        handle_rollback_stock_reply(message)
+        return
+    if isinstance(message, RollbackPaymentReply):
+        handle_rollback_payment_reply(message)
+        return
+    app.logger.warning(f"No handler registered for message type: {message.type}")
+
+
+def consumer_loop():
+    app.logger.info("order consumer loop starting")
+    consumer = create_consumer(
+        group_id="order-service",
+        topics=[
+            "find.stock.replies",
+            "subtract.stock.replies",
+            "payment.replies",
+            "rollback.stock.replies",
+            "rollback.payment.replies",
+        ],
+        auto_offset_reset="earliest",
+        enable_auto_commit=False,
+    )
+
+    while True:
+        msg = consumer.poll(1.0)
+
+        if msg is None:
+            continue
+
+        if msg.error():
+            app.logger.error("Kafka error: %s", msg.error())
+            continue
+
+        try:
+            message = decode_message(msg.value())
+            key = msg.key().decode() if msg.key() else ""
+            app.logger.info("consumed topic=%s key=%s type=%s", msg.topic(), key, message.type)
+            handle_message(message)
+            consumer.commit(message=msg)
+
+        except Exception as e:
+            app.logger.exception("Processing error in order consumer: %s", e)
+            consumer.commit(message=msg)
+            # todo: perform retry logic here
+            # no commit -> message will be retried
 
 
 class OrderValue(Struct):
@@ -248,20 +434,12 @@ def find_order(order_id: str):
 
 @app.post('/addItem/<order_id>/<item_id>/<quantity>')
 def add_item(order_id: str, item_id: str, quantity: int):
-    order_entry: OrderValue = get_order_from_db(order_id)
-    item_reply = send_get_request(f"{GATEWAY_URL}/stock/find/{item_id}")
-    if item_reply.status_code != 200:
-        # Request failed because item does not exist
-        abort(400, f"Item: {item_id} does not exist!")
-    item_json: dict = item_reply.json()
-    order_entry.items.append((item_id, int(quantity)))
-    order_entry.total_cost += int(quantity) * item_json["price"]
-    try:
-        db.set(order_id, msgpack.encode(order_entry))
-    except redis.exceptions.RedisError:
-        return abort(400, DB_ERROR_STR)
-    return Response(f"Item: {item_id} added to: {order_id} price updated to: {order_entry.total_cost}",
-                    status=200)
+    publish_find_stock(order_id, item_id, quantity)
+
+    return Response(
+        f"Stock check requested for item {item_id} in order {order_id} ",
+        status=202
+    )
 
 
 @app.post('/checkout/<order_id>')
@@ -330,8 +508,10 @@ recover_in_doubt_transactions()
 
 
 if __name__ == '__main__':
+    start_consumer()
     app.run(host="0.0.0.0", port=8000, debug=True)
 else:
+    start_consumer()
     gunicorn_logger = logging.getLogger('gunicorn.error')
     app.logger.handlers = gunicorn_logger.handlers
     app.logger.setLevel(gunicorn_logger.level)
