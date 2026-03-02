@@ -266,3 +266,20 @@ services:
   payment-db-2:
     image: redis:7.2-bookworm
     command: redis-server --requirepass redis --maxmemory 512mb
+
+#  tests:
+#    image: python:3.11
+#    container_name: dds26-tests
+#    working_dir: /app
+#    volumes:
+#      - .:/app
+#    networks:
+#      - default
+#    depends_on:
+#      - order-service
+#      - stock-service
+#      - payment-service
+#    command: >
+#      bash -c "pip install flask msgspec redis pytest requests -q &&
+#               pytest test/test_integration_saga.py -v"
+#

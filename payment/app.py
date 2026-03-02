@@ -8,6 +8,7 @@ import urllib.request
 
 import msgspec
 import redis
+import time
 
 from msgspec import msgpack, Struct
 from flask import Flask, jsonify, abort, Response
@@ -32,6 +33,10 @@ db: redis.Redis = redis.Redis(host=os.environ['REDIS_HOST'],
                               port=int(os.environ['REDIS_PORT']),
                               password=os.environ['REDIS_PASSWORD'],
                               db=int(os.environ['REDIS_DB']))
+
+MAX_RETRIES    = 5
+
+_consumer_retry_counts: dict[str, int] = {}
 
 
 def close_db_connection():
@@ -94,10 +99,6 @@ def remove_credit_core(user_id: str, amount: int) -> UserValue:
     user_entry.credit -= int(amount)
     if user_entry.credit < 0:
         raise ValueError(f"User: {user_id} credit cannot get reduced below zero!")
-    try:
-        db.set(user_id, msgpack.encode(user_entry))
-    except redis.exceptions.RedisError as e:
-        raise RuntimeError(DB_ERROR_STR) from e
     return user_entry
 
 
@@ -117,8 +118,13 @@ def handle_payment_request(message: PaymentRequest):
 
     try:
         # subtract money and log that you have subtracted money
-        remove_credit_core(message.user_id, int(message.amount))
-        store_operation_record(message.idempotency_key, True, None)
+        user_entry = remove_credit_core(message.user_id, int(message.amount))
+        pipe = db.pipeline()
+        pipe.set(message.user_id, msgpack.encode(user_entry))
+        pipe.set(operation_record_key(message.idempotency_key),
+                 msgpack.encode(IdempotentReplyRecord(success=True, error=None)))
+        pipe.execute()
+
         reply = PaymentReply(
             idempotency_key=message.idempotency_key,
             order_id=message.order_id,
@@ -187,8 +193,9 @@ def handle_http_command(command: dict):
     )
 
 
-# todo: implement payment rollback logic and adapt the reply down here
+
 def handle_rollback_payment_request(message: RollbackPaymentRequest):
+    # Idempotency check — if we already successfully rolled this back, just reply
     cached = get_operation_record(message.idempotency_key)
     if cached is not None and cached.success:
         reply = RollbackPaymentReply(
@@ -196,20 +203,52 @@ def handle_rollback_payment_request(message: RollbackPaymentRequest):
             order_id=message.order_id,
             user_id=message.user_id,
             amount=message.amount,
-            success=cached.success,
-            error=cached.error,
+            success=True,
+            error=None,
         )
         publish(topic="rollback.payment.replies", key=message.order_id, value=reply)
         return
 
-    store_operation_record(message.idempotency_key, False, "rollback payment not implemented")
+    # Check if the original payment actually succeeded
+    # If it never succeeded, there is nothing to refund
+    payment_idem_key = f"order:{message.order_id}:payment_request:{message.user_id}:{message.amount}"
+    payment_record = get_operation_record(payment_idem_key)
+
+    if payment_record is None or not payment_record.success:
+        # Payment was never actually taken — nothing to refund
+        app.logger.info(
+            "Rollback skipped for user=%s order=%s — payment never succeeded",
+            message.user_id, message.order_id
+        )
+        store_operation_record(message.idempotency_key, True, None)
+        reply = RollbackPaymentReply(
+            idempotency_key=message.idempotency_key,
+            order_id=message.order_id,
+            user_id=message.user_id,
+            amount=message.amount,
+            success=True,  # nothing to roll back, not an error
+        )
+        publish(topic="rollback.payment.replies", key=message.order_id, value=reply)
+        return
+
+    # Payment was successfully taken — refund it
+
+    user_entry = get_user_from_db(message.user_id)
+    user_entry.credit += int(message.amount)
+
+    # so that if things fail in between there is idempotency
+    pipe = db.pipeline()
+    pipe.set(message.user_id, msgpack.encode(user_entry))
+    pipe.set(operation_record_key(message.idempotency_key),
+             msgpack.encode(IdempotentReplyRecord(success=True, error=None)))
+    pipe.execute()
+
     reply = RollbackPaymentReply(
         idempotency_key=message.idempotency_key,
         order_id=message.order_id,
         user_id=message.user_id,
         amount=message.amount,
-        success=False,
-        error="rollback payment not implemented",
+        success=True,
     )
     publish(topic="rollback.payment.replies", key=message.order_id, value=reply)
 
@@ -239,6 +278,8 @@ def consumer_loop():
             else:
                 app.logger.error("Kafka error: %s", msg.error())
             continue
+
+        key = msg.key().decode() if msg.key() else str(msg.offset())
         try:
             if msg.topic() == "gateway.payment.commands":
                 command = msgspec.json.decode(msg.value(), type=dict)
@@ -248,9 +289,19 @@ def consumer_loop():
             message = decode_message(msg.value())
             handle_message(message)
             consumer.commit(message=msg)
+            _consumer_retry_counts.pop(key, None)
         except Exception as e:
-            app.logger.exception("Processing error in payment consumer: %s", e)
-            consumer.commit(message=msg)
+            _consumer_retry_counts[key] = _consumer_retry_counts.get(key, 0) + 1
+            attempt = _consumer_retry_counts[key]
+            app.logger.exception(
+                "Processing error (attempt %d/%d) key=%s: %s", attempt, MAX_RETRIES, key, e
+            )
+            if attempt >= MAX_RETRIES:
+                app.logger.error("Max consumer retries reached for key=%s — skipping", key)
+                consumer.commit(message=msg)
+                _consumer_retry_counts.pop(key, None)
+            else:
+                time.sleep(min(2 ** attempt, 30))
 
 
 def start_consumer():
@@ -314,6 +365,7 @@ def add_credit(user_id: str, amount: int):
 def remove_credit(user_id: str, amount: int):
     try:
         user_entry = remove_credit_core(user_id, int(amount))
+        db.set(user_id, msgpack.encode(user_entry))
     except ValueError as e:
         abort(400, str(e))
     except RuntimeError:

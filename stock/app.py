@@ -8,6 +8,7 @@ import urllib.request
 
 import msgspec
 import redis
+import time
 
 from msgspec import msgpack, Struct
 from flask import Flask, jsonify, abort, Response
@@ -35,6 +36,8 @@ db: redis.Redis = redis.Redis(host=os.environ['REDIS_HOST'],
                               password=os.environ['REDIS_PASSWORD'],
                               db=int(os.environ['REDIS_DB']))
 
+MAX_RETRIES = 5
+_consumer_retry_counts: dict[str, int] = {}
 
 def close_db_connection():
     db.close()
@@ -92,10 +95,7 @@ def get_item_from_db(item_id: str) -> StockValue | None:
 
 
 def get_item_from_db_nullable(item_id: str) -> StockValue | None:
-    try:
-        entry: bytes = db.get(item_id)
-    except redis.exceptions.RedisError:
-        return None
+    entry: bytes = db.get(item_id)
     return msgpack.decode(entry, type=StockValue) if entry else None
 
 
@@ -105,14 +105,16 @@ def subtract_stock_core(item_id: str, amount: int) -> StockValue:
     app.logger.debug(f"Item: {item_id} stock updated to: {item_entry.stock}")
     if item_entry.stock < 0:
         raise ValueError(f"Item: {item_id} stock cannot get reduced below zero!")
-    try:
-        db.set(item_id, msgpack.encode(item_entry))
-    except redis.exceptions.RedisError as e:
-        raise RuntimeError(DB_ERROR_STR) from e
     return item_entry
 
 
 def handle_find_stock(message: FindStock, order_id: str):
+    cached = get_operation_record(message.idempotency_key)
+    if cached is not None and cached.success:
+        # already processed — but we don't store the reply so we can't replay it
+        # just skip, order service already has the item
+        return
+
     app.logger.info("received find.stock request order_id=%s item_id=%s qty=%s", order_id, message.item_id, message.quantity)
     item_entry = get_item_from_db_nullable(message.item_id)
     if item_entry is None:
@@ -134,6 +136,7 @@ def handle_find_stock(message: FindStock, order_id: str):
             price=item_entry.price,
         )
 
+    store_operation_record(message.idempotency_key, True, None)
     publish(
         topic="find.stock.replies",
         key=order_id,
@@ -208,8 +211,13 @@ def handle_subtract_stock(message: SubtractStock):
         return
 
     try:
-        subtract_stock_core(message.item_id, int(message.quantity))
-        store_operation_record(message.idempotency_key, True, None)
+        item_entry = subtract_stock_core(message.item_id, int(message.quantity))
+        pipe = db.pipeline()
+        pipe.set(message.item_id, msgpack.encode(item_entry))
+        pipe.set(operation_record_key(message.idempotency_key),
+                 msgpack.encode(IdempotentReplyRecord(success=True, error=None)))
+        pipe.execute()
+
         reply = StockSubtractedReply(
             idempotency_key=message.idempotency_key,
             order_id=message.order_id,
@@ -234,8 +242,8 @@ def handle_subtract_stock(message: SubtractStock):
         value=reply,
     )
 
-# todo: implement stock rollback logic and adapt the reply down here
 def handle_rollback_stock(message: RollbackStockRequest):
+    # Idempotency check — if we already successfully rolled this back, just reply
     cached = get_operation_record(message.idempotency_key)
     if cached is not None and cached.success:
         reply = RollbackStockReply(
@@ -243,26 +251,54 @@ def handle_rollback_stock(message: RollbackStockRequest):
             order_id=message.order_id,
             item_id=message.item_id,
             quantity=message.quantity,
-            success=cached.success,
-            error=cached.error,
+            success=True,
+            error=None,
         )
         publish(topic="rollback.stock.replies", key=message.order_id, value=reply)
         return
 
-    store_operation_record(message.idempotency_key, False, "rollback stock not implemented")
+    # Check if the original subtraction actually succeeded
+    # If it never succeeded, there is nothing to roll back
+    subtract_idem_key = f"order:{message.order_id}:subtract_stock:{message.item_id}:{message.quantity}"
+    subtract_record = get_operation_record(subtract_idem_key)
+
+    if subtract_record is None or not subtract_record.success:
+        # Stock was never actually subtracted — nothing to restore
+        app.logger.info(
+            "Rollback skipped for item=%s order=%s — subtraction never succeeded",
+            message.item_id, message.order_id
+        )
+        store_operation_record(message.idempotency_key, True, None)
+        reply = RollbackStockReply(
+            idempotency_key=message.idempotency_key,
+            order_id=message.order_id,
+            item_id=message.item_id,
+            quantity=message.quantity,
+            success=True,
+        )
+        publish(topic="rollback.stock.replies", key=message.order_id, value=reply)
+        return
+
+    # Stock was successfully subtracted — restore it
+
+    item_entry = get_item_from_db(message.item_id)
+    item_entry.stock += int(message.quantity)
+
+    pipe = db.pipeline()
+    pipe.set(message.item_id, msgpack.encode(item_entry))
+    pipe.set(operation_record_key(message.idempotency_key),
+             msgpack.encode(IdempotentReplyRecord(success=True, error=None)))
+    pipe.execute()
+
     reply = RollbackStockReply(
         idempotency_key=message.idempotency_key,
         order_id=message.order_id,
         item_id=message.item_id,
         quantity=message.quantity,
-        success=False,
-        error="rollback stock not implemented",
+        success=True,
     )
-    publish(
-        topic="rollback.stock.replies",
-        key=message.order_id,
-        value=reply,
-    )
+
+    publish(topic="rollback.stock.replies", key=message.order_id, value=reply)
 
 def consumer_loop():
     app.logger.info(
@@ -289,6 +325,8 @@ def consumer_loop():
             else:
                 app.logger.error("Kafka error: %s", msg.error())
             continue
+
+        key = msg.key().decode() if msg.key() else str(msg.offset())
         try:
             if msg.topic() == "gateway.stock.commands":
                 command = msgspec.json.decode(msg.value(), type=dict)
@@ -296,14 +334,23 @@ def consumer_loop():
                 consumer.commit(message=msg)
                 continue
             message = decode_message(msg.value())
-            key = msg.key().decode() if msg.key() else ""
             app.logger.info("consumed topic=%s key=%s type=%s", msg.topic(), key, message.type)
             handle_message(message, key)
             consumer.commit(message=msg)
+            _consumer_retry_counts.pop(key, None)
+
         except Exception as e:
-            app.logger.exception("Processing error in stock consumer: %s", e)
-            # prevent one malformed record from blocking the partition forever
-            consumer.commit(message=msg)
+            _consumer_retry_counts[key] = _consumer_retry_counts.get(key, 0) + 1
+            attempt = _consumer_retry_counts[key]
+            app.logger.exception(
+                "Processing error (attempt %d/%d) key=%s: %s", attempt, MAX_RETRIES, key, e
+            )
+            if attempt >= MAX_RETRIES:
+                app.logger.error("Max consumer retries reached for key=%s — skipping", key)
+                consumer.commit(message=msg)
+                _consumer_retry_counts.pop(key, None)
+            else:
+                time.sleep(min(2 ** attempt, 30))
 
 
 def start_consumer():
@@ -369,6 +416,7 @@ def add_stock(item_id: str, amount: int):
 def remove_stock(item_id: str, amount: int):
     try:
         item_entry = subtract_stock_core(item_id, int(amount))
+        db.set(item_id, msgpack.encode(item_entry))
     except ValueError as e:
         abort(400, str(e))
     except RuntimeError:
