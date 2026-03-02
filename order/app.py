@@ -3,6 +3,7 @@ import os
 import atexit
 import random
 import uuid
+import time
 from collections import defaultdict
 
 import redis
@@ -39,6 +40,17 @@ class OrderValue(Struct):
     total_cost: int
 
 
+class CheckoutTransaction(Struct):
+    # PREPARING -> DECIDED -> COMPLETED
+    state: str
+    # COMMIT or ABORT once coordinator reaches a durable decision
+    decision: str
+    order_id: str
+    user_id: str
+    total_cost: int
+    items: list[tuple[str, int]]
+
+
 def get_order_from_db(order_id: str) -> OrderValue | None:
     try:
         # get serialized data
@@ -51,6 +63,135 @@ def get_order_from_db(order_id: str) -> OrderValue | None:
         # if order does not exist in the database; abort
         abort(400, f"Order: {order_id} not found!")
     return entry
+
+
+def get_order_if_exists(order_id: str) -> OrderValue | None:
+    try:
+        entry: bytes | None = db.get(order_id)
+    except redis.exceptions.RedisError:
+        return None
+    return msgpack.decode(entry, type=OrderValue) if entry else None
+
+
+def get_tx_from_db(tx_id: str) -> CheckoutTransaction | None:
+    try:
+        entry: bytes | None = db.get(f"tx:{tx_id}")
+    except redis.exceptions.RedisError:
+        abort(400, DB_ERROR_STR)
+    return msgpack.decode(entry, type=CheckoutTransaction) if entry else None
+
+
+def set_tx(tx_id: str, tx: CheckoutTransaction):
+    # Coordinator decision/state must be persisted before contacting participants.
+    try:
+        db.set(f"tx:{tx_id}", msgpack.encode(tx))
+    except redis.exceptions.RedisError:
+        abort(400, DB_ERROR_STR)
+
+
+def aggregate_items(items: list[tuple[str, int]]) -> list[tuple[str, int]]:
+    # Merge duplicate item lines so participants reserve/commit once per item id.
+    items_quantities: dict[str, int] = defaultdict(int)
+    for item_id, quantity in items:
+        items_quantities[item_id] += quantity
+    return [(item_id, quantity) for item_id, quantity in items_quantities.items()]
+
+
+def send_post_request(url: str, json_payload: dict | None = None):
+    try:
+        response = requests.post(url, json=json_payload, timeout=5)
+    except requests.exceptions.RequestException:
+        return None
+    return response
+
+
+def send_get_request(url: str):
+    try:
+        response = requests.get(url, timeout=5)
+    except requests.exceptions.RequestException:
+        abort(400, REQ_ERROR_STR)
+    else:
+        return response
+
+
+def execute_decision(tx_id: str, tx: CheckoutTransaction) -> bool:
+    # Phase 2: fan out the already-persisted decision to all participants.
+    if tx.decision == "COMMIT":
+        stock_reply = send_post_request(f"{GATEWAY_URL}/stock/commit/{tx_id}")
+        payment_reply = send_post_request(f"{GATEWAY_URL}/payment/commit/{tx_id}")
+    else:
+        stock_reply = send_post_request(f"{GATEWAY_URL}/stock/abort/{tx_id}")
+        payment_reply = send_post_request(f"{GATEWAY_URL}/payment/abort/{tx_id}")
+
+    return (
+        stock_reply is not None
+        and payment_reply is not None
+        and stock_reply.status_code == 200
+        and payment_reply.status_code == 200
+    )
+
+
+def apply_commit_effects(tx: CheckoutTransaction) -> bool:
+    # Order is marked paid only after both participants acknowledge COMMIT.
+    order_entry = get_order_if_exists(tx.order_id)
+    if order_entry is None:
+        return False
+    if order_entry.paid:
+        return True
+    order_entry.paid = True
+    try:
+        db.set(tx.order_id, msgpack.encode(order_entry))
+    except redis.exceptions.RedisError:
+        return False
+    return True
+
+
+def finalize_transaction(tx_id: str, tx: CheckoutTransaction) -> bool:
+    # Short retry loop keeps request path responsive; unresolved tx is recovered on startup.
+    for _ in range(3):
+        if execute_decision(tx_id, tx):
+            if tx.decision == "COMMIT" and not apply_commit_effects(tx):
+                return False
+            tx.state = "COMPLETED"
+            set_tx(tx_id, tx)
+            return True
+        time.sleep(0.2)
+    return False
+
+
+def recover_in_doubt_transactions():
+    # Recovery rule:
+    # - PREPARING has no durable decision yet, force ABORT.
+    # - DECIDED replays COMMIT/ABORT until participants acknowledge.
+    try:
+        tx_keys = list(db.scan_iter("tx:*"))
+    except redis.exceptions.RedisError:
+        return
+
+    for raw_key in tx_keys:
+        tx_key = raw_key.decode()
+        tx_id = tx_key.split("tx:", 1)[1]
+        try:
+            tx_raw: bytes | None = db.get(tx_key)
+        except redis.exceptions.RedisError:
+            continue
+        if not tx_raw:
+            continue
+
+        tx: CheckoutTransaction = msgpack.decode(tx_raw, type=CheckoutTransaction)
+        if tx.state == "COMPLETED":
+            continue
+
+        if tx.state == "PREPARING":
+            tx.decision = "ABORT"
+            tx.state = "DECIDED"
+            try:
+                db.set(tx_key, msgpack.encode(tx))
+            except redis.exceptions.RedisError:
+                continue
+
+        if tx.state == "DECIDED":
+            finalize_transaction(tx_id, tx)
 
 
 @app.post('/create/<user_id>')
@@ -105,24 +246,6 @@ def find_order(order_id: str):
     )
 
 
-def send_post_request(url: str):
-    try:
-        response = requests.post(url)
-    except requests.exceptions.RequestException:
-        abort(400, REQ_ERROR_STR)
-    else:
-        return response
-
-
-def send_get_request(url: str):
-    try:
-        response = requests.get(url)
-    except requests.exceptions.RequestException:
-        abort(400, REQ_ERROR_STR)
-    else:
-        return response
-
-
 @app.post('/addItem/<order_id>/<item_id>/<quantity>')
 def add_item(order_id: str, item_id: str, quantity: int):
     order_entry: OrderValue = get_order_from_db(order_id)
@@ -141,41 +264,69 @@ def add_item(order_id: str, item_id: str, quantity: int):
                     status=200)
 
 
-def rollback_stock(removed_items: list[tuple[str, int]]):
-    for item_id, quantity in removed_items:
-        send_post_request(f"{GATEWAY_URL}/stock/add/{item_id}/{quantity}")
-
-
 @app.post('/checkout/<order_id>')
 def checkout(order_id: str):
     app.logger.debug(f"Checking out {order_id}")
     order_entry: OrderValue = get_order_from_db(order_id)
-    # get the quantity per item
-    items_quantities: dict[str, int] = defaultdict(int)
-    for item_id, quantity in order_entry.items:
-        items_quantities[item_id] += quantity
-    # The removed items will contain the items that we already have successfully subtracted stock from
-    # for rollback purposes.
-    removed_items: list[tuple[str, int]] = []
-    for item_id, quantity in items_quantities.items():
-        stock_reply = send_post_request(f"{GATEWAY_URL}/stock/subtract/{item_id}/{quantity}")
-        if stock_reply.status_code != 200:
-            # If one item does not have enough stock we need to rollback
-            rollback_stock(removed_items)
-            abort(400, f'Out of stock on item_id: {item_id}')
-        removed_items.append((item_id, quantity))
-    user_reply = send_post_request(f"{GATEWAY_URL}/payment/pay/{order_entry.user_id}/{order_entry.total_cost}")
-    if user_reply.status_code != 200:
-        # If the user does not have enough credit we need to rollback all the item stock subtractions
-        rollback_stock(removed_items)
-        abort(400, "User out of credit")
-    order_entry.paid = True
-    try:
-        db.set(order_id, msgpack.encode(order_entry))
-    except redis.exceptions.RedisError:
-        return abort(400, DB_ERROR_STR)
-    app.logger.debug("Checkout successful")
-    return Response("Checkout successful", status=200)
+    if order_entry.paid:
+        return Response("Order already paid", status=200)
+
+    # One checkout attempt corresponds to one distributed transaction id.
+    tx_id = str(uuid.uuid4())
+    items = aggregate_items(order_entry.items)
+    tx = CheckoutTransaction(
+        state="PREPARING",
+        decision="UNKNOWN",
+        order_id=order_id,
+        user_id=order_entry.user_id,
+        total_cost=order_entry.total_cost,
+        items=items
+    )
+    set_tx(tx_id, tx)
+
+    # Phase 1: ask both participants to reserve resources.
+    stock_prepare_reply = send_post_request(
+        f"{GATEWAY_URL}/stock/prepare/{tx_id}",
+        {"items": items}
+    )
+    payment_prepare_reply = send_post_request(
+        f"{GATEWAY_URL}/payment/prepare/{tx_id}",
+        {"user_id": order_entry.user_id, "amount": order_entry.total_cost}
+    )
+
+    prepare_success = (
+        stock_prepare_reply is not None
+        and payment_prepare_reply is not None
+        and stock_prepare_reply.status_code == 200
+        and payment_prepare_reply.status_code == 200
+    )
+
+    if prepare_success:
+        # Persist COMMIT before issuing commit RPCs to make recovery deterministic.
+        tx.decision = "COMMIT"
+        tx.state = "DECIDED"
+        set_tx(tx_id, tx)
+        if not finalize_transaction(tx_id, tx):
+            abort(500, "Commit decision stored but finalization is pending recovery")
+        app.logger.debug("Checkout successful")
+        return Response("Checkout successful", status=200)
+
+    # Any prepare failure means global ABORT decision.
+    tx.decision = "ABORT"
+    tx.state = "DECIDED"
+    set_tx(tx_id, tx)
+
+    if not finalize_transaction(tx_id, tx):
+        abort(500, "Abort decision stored but cleanup is pending recovery")
+
+    if stock_prepare_reply is not None and stock_prepare_reply.status_code != 200:
+        return Response(f"Stock prepare failed: {stock_prepare_reply.text}", status=400)
+    if payment_prepare_reply is not None and payment_prepare_reply.status_code != 200:
+        return Response("User out of credit", status=400)
+    abort(400, REQ_ERROR_STR)
+
+
+recover_in_doubt_transactions()
 
 
 if __name__ == '__main__':
