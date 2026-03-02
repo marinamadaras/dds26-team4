@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: Service # this section gives aliases to the dbs so you can reference them by name in other files
+metadata:
+  name: order-db
+spec:
+  type: ExternalName
+  externalName: order-db-redis-master.default.svc.cluster.local
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: stock-db
+spec:
+  type: ExternalName
+  externalName: stock-db-redis-master.default.svc.cluster.local
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: payment-db
+spec:
+  type: ExternalName
+  externalName: payment-db-redis-master.default.svc.cluster.local
