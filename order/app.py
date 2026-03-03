@@ -13,6 +13,7 @@ import time
 from msgspec import msgpack, Struct
 from flask import Flask, jsonify, abort, Response
 
+from msgspec import Struct
 from kafka_client import publish, create_consumer, decode_message
 from messages import (
     BaseMessage,
@@ -95,41 +96,40 @@ def make_idempotency_key(order_id: str, action: str, item_id: str = "", quantity
     return f"order:{order_id}:{action}:{item_id}:{int(quantity)}"
 
 
-# ROLL BACK
+class OutgoingMessageRecord(Struct):
+    idempotency_key: str
+    message_type: str
+    sent_at: float
+    reply_received: bool
+    retry_count: int
+    order_id: str
+    payload: bytes  # serialized message for retry
 
-def compensate_order(order: OrderValue, order_id: str) -> None:
-    """
-    Issue the correct compensating transactions based on how far the saga got.
+def log_outgoing_message(idempotency_key: str, message_type: str, order_id: str, message: BaseMessage):
+    """Log before sending any message"""
+    record = OutgoingMessageRecord(
+        idempotency_key=idempotency_key,
+        message_type=message_type,
+        sent_at=time.time(),
+        reply_received=False,
+        retry_count=0,
+        order_id=order_id,
+        payload=msgpack.encode(message)
+    )
+    key = f"_outgoing:{idempotency_key}"
+    db.set(key, msgpack.encode(record))
+    app.logger.info(f"Logged outgoing message: {idempotency_key}")
 
-    STOCK_PENDING   → stock subtraction was in-flight; rollback each item
-                      (stock service must be idempotent — rollback of nothing is a no-op).
-    STOCK_RESERVED  → rollback stock.
-    PAYMENT_PENDING → rollback stock
-    ORDER_COMPLETED → rollback both stock and payment.
-    """
-    status = order.status
+def mark_reply_received(idempotency_key: str):
+    """Mark that we received a reply for this message"""
+    key = f"_outgoing:{idempotency_key}"
+    raw = db.get(key)
+    if raw:
+        record = msgpack.decode(raw, type=OutgoingMessageRecord)
+        record.reply_received = True
+        db.set(key, msgpack.encode(record))
+        app.logger.info(f"Marked reply received: {idempotency_key}")
 
-    if status in (STOCK_PENDING, STOCK_RESERVED, PAYMENT_PENDING):
-        app.logger.warning(
-            "Compensating order %s from status=%s — rolling back stock", order_id, status
-        )
-        for item_id, quantity in order.items:
-            publish_rollback_stock(order_id, item_id, quantity)
-
-    elif status == ORDER_COMPLETED:
-        app.logger.warning(
-            "Compensating COMPLETED order %s — rolling back stock + payment", order_id
-        )
-        for item_id, quantity in order.items:
-            publish_rollback_stock(order_id, item_id, quantity)
-        publish_rollback_payment(order_id, order.user_id, order.total_cost)
-
-    # Persist cancellation
-    order.status = ORDER_CANCELLED
-    try:
-        db.set(order_id, msgpack.encode(order))
-    except redis.exceptions.RedisError as e:
-        app.logger.error("Could not persist ORDER_CANCELLED for %s: %s", order_id, e)
 
 # RETRY
 
@@ -293,7 +293,7 @@ def publish_payment(order_id: str, user_id: str, amount: int):
         user_id=user_id,
         amount=int(amount),
     )
-    log_outgoing_message(idem_key, "payment", order_id, "payment", message)
+    log_outgoing_message(idem_key, "payment", order_id, message)
     publish(topic="payment", key=order_id, value=message)
     app.logger.info("sent payment idem_key=%s", idem_key)
 
@@ -307,7 +307,7 @@ def publish_rollback_stock(order_id: str, item_id: str, quantity: int):
         item_id=item_id,
         quantity=int(quantity),
     )
-    log_outgoing_message(idem_key, "rollback_stock", order_id, "rollback.stock", message)
+    log_outgoing_message(idem_key, "rollback_stock", order_id, message)
     publish(topic="rollback.stock", key=order_id, value=message)
     app.logger.info("sent rollback_stock idem_key=%s", idem_key)
 
@@ -320,7 +320,7 @@ def publish_rollback_payment(order_id: str, user_id: str, amount: int):
         user_id=user_id,
         amount=int(amount),
     )
-    log_outgoing_message(idem_key, "rollback_payment", order_id, "rollback.payment", message)
+    log_outgoing_message(idem_key, "rollback_payment", order_id, message)
     publish(topic="rollback.payment", key=order_id, value=message)
     app.logger.info("sent rollback_payment idem_key=%s", idem_key)
 
@@ -393,10 +393,11 @@ def handle_stock_subtracted_reply(message: StockSubtractedReply):
             order.user_id,
             order.total_cost
         )
-        # store_reply_processing_record(message.idempotency_key, True)
+
     else:
         db.set(order_id, msgpack.encode(order))
-        store_reply_processing_record(message.idempotency_key, True)
+
+    store_reply_processing_record(message.idempotency_key, True)
 
 
 
@@ -536,6 +537,41 @@ class OrderValue(Struct):
     expected_items: int
     stock_confirmations: int
 
+# ROLL BACK
+
+def compensate_order(order: OrderValue, order_id: str) -> None:
+    """
+    Issue the correct compensating transactions based on how far the saga got.
+
+    STOCK_PENDING   → stock subtraction was in-flight; rollback each item
+                      (stock service must be idempotent — rollback of nothing is a no-op).
+    STOCK_RESERVED  → rollback stock.
+    PAYMENT_PENDING → rollback stock
+    ORDER_COMPLETED → rollback both stock and payment.
+    """
+    status = order.status
+
+    if status in (STOCK_PENDING, STOCK_RESERVED, PAYMENT_PENDING):
+        app.logger.warning(
+            "Compensating order %s from status=%s — rolling back stock", order_id, status
+        )
+        for item_id, quantity in order.items:
+            publish_rollback_stock(order_id, item_id, quantity)
+
+    elif status == ORDER_COMPLETED:
+        app.logger.warning(
+            "Compensating COMPLETED order %s — rolling back stock + payment", order_id
+        )
+        for item_id, quantity in order.items:
+            publish_rollback_stock(order_id, item_id, quantity)
+        publish_rollback_payment(order_id, order.user_id, order.total_cost)
+
+    # Persist cancellation
+    order.status = ORDER_CANCELLED
+    try:
+        db.set(order_id, msgpack.encode(order))
+    except redis.exceptions.RedisError as e:
+        app.logger.error("Could not persist ORDER_CANCELLED for %s: %s", order_id, e)
 
 
 def get_order_from_db(order_id: str) -> OrderValue | None:
