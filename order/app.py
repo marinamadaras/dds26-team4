@@ -134,20 +134,22 @@ def mark_reply_received(idempotency_key: str):
 # RETRY
 
 def _resend_outgoing_record(record: OutgoingMessageRecord) -> None:
-    """Deserialise and re-publish a stored outgoing message."""
-    if record.message_type == "subtract_stock":
-        message = msgpack.decode(record.payload, type=SubtractStock)
-    elif record.message_type == "payment":
-        message = msgpack.decode(record.payload, type=PaymentRequest)
-    elif record.message_type == "rollback_stock":
-        message = msgpack.decode(record.payload, type=RollbackStockRequest)
-    elif record.message_type == "rollback_payment":
-        message = msgpack.decode(record.payload, type=RollbackPaymentRequest)
-    else:
+    type_map = {
+        "subtract_stock": ("subtract.stock", SubtractStock),
+        "payment": ("payment", PaymentRequest),
+        "rollback_stock": ("rollback.stock", RollbackStockRequest),
+        "rollback_payment": ("rollback.payment", RollbackPaymentRequest),
+    }
+
+    entry = type_map.get(record.message_type)
+    if not entry:
         app.logger.error("Unknown message_type in outgoing record: %s", record.message_type)
         return
 
-    publish(topic=record.topic, key=record.order_id, value=message)
+    topic, message_cls = entry
+    message = msgpack.decode(record.payload, type=message_cls)
+
+    publish(topic=topic, key=record.order_id, value=message)
     app.logger.info(
         "retried %s idem_key=%s attempt=%d",
         record.message_type, record.idempotency_key, record.retry_count
@@ -186,13 +188,21 @@ def check_and_retry_pending_messages() -> None:
                     continue
 
                 if record.retry_count >= MAX_RETRIES:
-                    app.logger.error(
-                        "Max retries exceeded idem_key=%s — cancelling order %s",
-                        record.idempotency_key, record.order_id
-                    )
                     order = get_order_from_db(record.order_id)
                     if order.status not in (ORDER_CANCELLED, ORDER_COMPLETED):
+                        # Forward saga step failed — compensate
+                        app.logger.error(
+                            "Max retries exceeded for saga step idem_key=%s — compensating order %s",
+                            record.idempotency_key, record.order_id
+                        )
                         compensate_order(order, record.order_id)
+                    else:
+                        # Rollback itself failed
+                        app.logger.critical(
+                            "MANUAL INTERVENTION REQUIRED — rollback failed after max retries "
+                            "idem_key=%s order=%s message_type=%s. Stock or payment may be inconsistent.",
+                            record.idempotency_key, record.order_id, record.message_type
+                        )
                     continue
 
 
@@ -337,30 +347,24 @@ def handle_find_stock_reply(message: FindStockReply):
             f"Stock not found for item {message.item_id} in order {message.order_id}"
         )
         return  # nothing to update
-        # Shouldn't we throw error or something
 
-    try:
-        order_entry: OrderValue = get_order_from_db(message.order_id)
 
-        order_entry.items.append(
-            (message.item_id, int(message.quantity))
-        )
+    order_entry: OrderValue = get_order_from_db(message.order_id)
 
-        order_entry.total_cost += (
-            int(message.quantity) * message.price
-        )
+    order_entry.items.append(
+        (message.item_id, int(message.quantity))
+    )
 
-        db.set(message.order_id, msgpack.encode(order_entry))
-        store_reply_processing_record(message.idempotency_key, True)
+    order_entry.total_cost += (
+        int(message.quantity) * message.price
+    )
 
-        app.logger.info(
-            f"Order {message.order_id} updated asynchronously"
-        )
+    db.set(message.order_id, msgpack.encode(order_entry))
+    store_reply_processing_record(message.idempotency_key, True)
 
-    except redis.exceptions.RedisError as e:
-        app.logger.error(f"DB error: {e}")
-        raise
-
+    app.logger.info(
+        f"Order {message.order_id} updated asynchronously"
+    )
 
 
 def handle_stock_subtracted_reply(message: StockSubtractedReply):
@@ -417,14 +421,12 @@ def handle_payment_reply(message: PaymentReply):
         return
 
     if message.success:
-        try:
-            order.status = ORDER_COMPLETED
-            db.set(order_id, msgpack.encode(order))
-            store_reply_processing_record(message.idempotency_key, True)
-            app.logger.info("Order completed: %s", order_id)
-        except Exception as e:
-            app.logger.error("DB failure after payment → refunding : %s", e)
-            raise
+
+        order.status = ORDER_COMPLETED
+        db.set(order_id, msgpack.encode(order))
+        store_reply_processing_record(message.idempotency_key, True)
+        app.logger.info("Order completed: %s", order_id)
+
 
     else:
         app.logger.info("Payment failed for order %s — rolling back stock", order_id)
@@ -505,12 +507,13 @@ def consumer_loop():
             app.logger.error("Kafka error: %s", msg.error())
             continue
 
+        key = msg.key().decode() if msg.key() else ""
         try:
             message = decode_message(msg.value())
-            key = msg.key().decode() if msg.key() else ""
             app.logger.info("consumed topic=%s key=%s type=%s", msg.topic(), key, message.type)
             handle_message(message)
             consumer.commit(message=msg)
+            _consumer_retry_counts.pop(key, None)
 
         except Exception as e:
 
@@ -568,10 +571,7 @@ def compensate_order(order: OrderValue, order_id: str) -> None:
 
     # Persist cancellation
     order.status = ORDER_CANCELLED
-    try:
-        db.set(order_id, msgpack.encode(order))
-    except redis.exceptions.RedisError as e:
-        app.logger.error("Could not persist ORDER_CANCELLED for %s: %s", order_id, e)
+    db.set(order_id, msgpack.encode(order))
 
 
 def get_order_from_db(order_id: str) -> OrderValue | None:
@@ -612,10 +612,14 @@ def batch_init_users(n: int, n_items: int, n_users: int, item_price: int):
         user_id = random.randint(0, n_users - 1)
         item1_id = random.randint(0, n_items - 1)
         item2_id = random.randint(0, n_items - 1)
-        value = OrderValue(paid=False,
-                           items=[(f"{item1_id}", 1), (f"{item2_id}", 1)],
-                           user_id=f"{user_id}",
-                           total_cost=2*item_price)
+        value = OrderValue(
+            status=ORDER_CREATED,
+            items=[(f"{item1_id}", 1), (f"{item2_id}", 1)],
+            user_id=f"{user_id}",
+            total_cost=2 * item_price,
+            expected_items=2,
+            stock_confirmations=0,
+        )
         return value
 
     kv_pairs: dict[str, bytes] = {f"{i}": msgpack.encode(generate_entry())
@@ -708,7 +712,9 @@ if __name__ == '__main__':
     app.run(host="0.0.0.0", port=8000, debug=True)
 else:
     if os.getenv("DISABLE_KAFKA_CONSUMER") != "1":
+        recover_on_startup()
         start_consumer()
+        start_retry_checker()
     gunicorn_logger = logging.getLogger('gunicorn.error')
     app.logger.handlers = gunicorn_logger.handlers
     app.logger.setLevel(gunicorn_logger.level)
