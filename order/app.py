@@ -189,7 +189,7 @@ def handle_message(message: BaseMessage):
 
 
 def handle_http_command(command: dict):
-    # the messages from the api-gateway is handled here, to reuse the http logic, it makes a local http request but the actual communication is async
+    # Handle gateway Kafka commands by calling existing local HTTP routes.
     request_id = str(command.get("request_id", ""))
     method = str(command.get("method", "GET")).upper()
     action = str(command.get("action", "")).lstrip("/")

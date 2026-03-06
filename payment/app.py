@@ -21,8 +21,8 @@ from messages import (
 )
 
 DB_ERROR_STR = "DB error"
-KAFKA_CONSUMER_PARTITION = int(os.getenv("KAFKA_CONSUMER_PARTITION", "0")) # the partition it deals with (0-2)
-KAFKA_CONSUMER_INSTANCE_ID = os.getenv("KAFKA_CONSUMER_INSTANCE_ID", "payment-service-0") # tie to the actual docker item
+KAFKA_CONSUMER_PARTITION = int(os.getenv("KAFKA_CONSUMER_PARTITION", "0"))
+KAFKA_CONSUMER_INSTANCE_ID = os.getenv("KAFKA_CONSUMER_INSTANCE_ID", "payment-service-0")
 
 
 app = Flask("payment-service")
@@ -103,6 +103,7 @@ def handle_message(message: BaseMessage):
 
 
 def handle_http_command(command: dict):
+    # Handle gateway Kafka commands by calling existing local HTTP routes.
     request_id = str(command.get("request_id", ""))
     method = str(command.get("method", "GET")).upper()
     action = str(command.get("action", "")).lstrip("/")

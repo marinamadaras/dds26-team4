@@ -1,7 +1,7 @@
 import os
 
 import msgspec
-from confluent_kafka import Producer, Consumer, TopicPartition
+from confluent_kafka import Producer, Consumer, TopicPartition, OFFSET_STORED
 
 from messages import BaseMessage, MESSAGE_TYPES
 
@@ -15,6 +15,20 @@ def publish(topic: str, key: str, value: BaseMessage):
         topic,
         key=key.encode(),
         value=msgspec.json.encode(value),
+    )
+    producer.flush(2)
+
+
+def publish_raw(topic: str, key: str, payload: dict, partition: int | None = None):
+    # Used for gateway command/reply envelopes that are plain JSON dicts.
+    kwargs = {}
+    if partition is not None:
+        kwargs["partition"] = partition
+    producer.produce(
+        topic,
+        key=key.encode(),
+        value=msgspec.json.encode(payload),
+        **kwargs,
     )
     producer.flush(2)
 
@@ -52,5 +66,6 @@ def create_consumer(
     if partition is None:
         consumer.subscribe(topics)
     else:
-        consumer.assign([TopicPartition(topic, partition) for topic in topics])
+        # Read from stored committed offsets for this group/partition.
+        consumer.assign([TopicPartition(topic, partition, OFFSET_STORED) for topic in topics])
     return consumer

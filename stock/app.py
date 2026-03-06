@@ -125,6 +125,7 @@ def handle_message(message: BaseMessage, key: str):
 
 
 def handle_http_command(command: dict):
+    # Handle gateway Kafka commands by calling existing local HTTP routes.
     request_id = str(command.get("request_id", ""))
     method = str(command.get("method", "GET")).upper()
     action = str(command.get("action", "")).lstrip("/")
