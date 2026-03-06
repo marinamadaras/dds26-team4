@@ -6,15 +6,7 @@ services:
     ports:
       - "8000:80"
     depends_on:
-      - order-service-0
-      - order-service-1
-      - order-service-2
-      - stock-service-0
-      - stock-service-1
-      - stock-service-2
-      - payment-service-0
-      - payment-service-1
-      - payment-service-2
+      - api-gateway
 
   kafka:
     image: apache/kafka:latest
@@ -57,6 +49,19 @@ services:
       - ./kafka/init-topics.sh:/init-topics.sh
       - ./kafka/topics.txt:/topics.txt
     entrypoint: [ "/bin/bash", "/init-topics.sh" ]
+
+  api-gateway:
+    build: ./api-gateway
+    image: api-gateway:latest
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - KAFKA_PARTITIONS=3
+      - KAFKA_REQUEST_TIMEOUT_SECONDS=10
+    depends_on:
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
 
   order-service-0:
     build: ./order
