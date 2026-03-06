@@ -31,6 +31,8 @@ DB_ERROR_STR = "DB error"
 REQ_ERROR_STR = "Requests error"
 
 GATEWAY_URL = os.environ['GATEWAY_URL']
+KAFKA_CONSUMER_PARTITION = int(os.getenv("KAFKA_CONSUMER_PARTITION", "0"))
+KAFKA_CONSUMER_INSTANCE_ID = os.getenv("KAFKA_CONSUMER_INSTANCE_ID", "order-service-0")
 
 app = Flask("order-service")
 _consumer_thread: threading.Thread | None = None
@@ -135,12 +137,18 @@ def handle_stock_subtracted_reply(message: StockSubtractedReply):
     # todo: implement with sagas, we need to keep track of all pending items somehow
     # since we are async, we send multiple requests to the stock service for each item
     # and we can only proceed with the payment when we have received all of them
-    app.logger.info("stock subtracted not yet implemented", message.order_id)
+    app.logger.info(
+        "stock subtracted not yet implemented order_id=%s",
+        message.order_id,
+    )
 
 
 def handle_payment_reply(message: PaymentReply):
     # todo: implement with sagas, we need to keep track of all pending checkouts somehow
-    app.logger.info("stock subtracted not yet implemented", message.order_id)
+    app.logger.info(
+        "payment reply handling not yet implemented order_id=%s",
+        message.order_id,
+    )
 
 
 def handle_rollback_stock_reply(message: RollbackStockReply):
@@ -180,7 +188,11 @@ def handle_message(message: BaseMessage):
 
 
 def consumer_loop():
-    app.logger.info("order consumer loop starting")
+    app.logger.info(
+        "order consumer loop starting partition=%s instance_id=%s",
+        KAFKA_CONSUMER_PARTITION,
+        KAFKA_CONSUMER_INSTANCE_ID,
+    )
     consumer = create_consumer(
         group_id="order-service",
         topics=[
@@ -192,6 +204,8 @@ def consumer_loop():
         ],
         auto_offset_reset="earliest",
         enable_auto_commit=False,
+        partition=KAFKA_CONSUMER_PARTITION,
+        group_instance_id=KAFKA_CONSUMER_INSTANCE_ID,
     )
 
     while True:
@@ -201,7 +215,11 @@ def consumer_loop():
             continue
 
         if msg.error():
-            app.logger.error("Kafka error: %s", msg.error())
+            error_str = str(msg.error())
+            if "NOT_COORDINATOR" in error_str:
+                app.logger.warning("Kafka coordinator not ready yet: %s", msg.error())
+            else:
+                app.logger.error("Kafka error: %s", msg.error())
             continue
 
         try:

@@ -18,6 +18,8 @@ from messages import (
 )
 
 DB_ERROR_STR = "DB error"
+KAFKA_CONSUMER_PARTITION = int(os.getenv("KAFKA_CONSUMER_PARTITION", "0")) # the partition it deals with (0-2)
+KAFKA_CONSUMER_INSTANCE_ID = os.getenv("KAFKA_CONSUMER_INSTANCE_ID", "payment-service-0") # tie to the actual docker item
 
 
 app = Flask("payment-service")
@@ -110,19 +112,29 @@ def handle_rollback_payment_request(message: RollbackPaymentRequest):
 
 
 def consumer_loop():
-    app.logger.info("payment consumer loop starting")
+    app.logger.info(
+        "payment consumer loop starting partition=%s instance_id=%s",
+        KAFKA_CONSUMER_PARTITION,
+        KAFKA_CONSUMER_INSTANCE_ID,
+    )
     consumer = create_consumer(
         group_id="payment-service",
         topics=["payment", "rollback.payment"],
         auto_offset_reset="earliest",
         enable_auto_commit=False,
+        partition=KAFKA_CONSUMER_PARTITION,
+        group_instance_id=KAFKA_CONSUMER_INSTANCE_ID,
     )
     while True:
         msg = consumer.poll(1.0)
         if msg is None:
             continue
         if msg.error():
-            app.logger.error("Kafka error: %s", msg.error())
+            error_str = str(msg.error())
+            if "NOT_COORDINATOR" in error_str:
+                app.logger.warning("Kafka coordinator not ready yet: %s", msg.error())
+            else:
+                app.logger.error("Kafka error: %s", msg.error())
             continue
         try:
             message = decode_message(msg.value())

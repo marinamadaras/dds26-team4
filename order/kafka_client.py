@@ -2,7 +2,7 @@ import os
 import logging
 
 import msgspec
-from confluent_kafka import Producer, Consumer
+from confluent_kafka import Producer, Consumer, TopicPartition
 
 from messages import BaseMessage, MESSAGE_TYPES
 
@@ -39,12 +39,21 @@ def create_consumer(
     *,
     auto_offset_reset: str = "latest",
     enable_auto_commit: bool = False,
+    partition: int | None = None,
+    group_instance_id: str | None = None,
 ):
-    consumer = Consumer({
+    config = {
         "bootstrap.servers": BOOTSTRAP,
         "group.id": group_id,
         "auto.offset.reset": auto_offset_reset,
         "enable.auto.commit": enable_auto_commit,
-    })
-    consumer.subscribe(topics)
+    }
+    if group_instance_id:
+        config["group.instance.id"] = group_instance_id
+
+    consumer = Consumer(config)
+    if partition is None:
+        consumer.subscribe(topics)
+    else:
+        consumer.assign([TopicPartition(topic, partition) for topic in topics])
     return consumer
