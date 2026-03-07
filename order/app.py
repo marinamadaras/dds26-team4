@@ -6,13 +6,14 @@ import uuid
 import threading
 from collections import defaultdict
 
+import msgspec
 import redis
 import requests
 
 from msgspec import msgpack, Struct
 from flask import Flask, jsonify, abort, Response
 
-from kafka_client import publish, create_consumer, decode_message
+from kafka_client import publish, publish_raw, create_consumer, decode_message
 from messages import (
     BaseMessage,
     SubtractStock,
@@ -31,6 +32,8 @@ DB_ERROR_STR = "DB error"
 REQ_ERROR_STR = "Requests error"
 
 GATEWAY_URL = os.environ['GATEWAY_URL']
+KAFKA_CONSUMER_PARTITION = int(os.getenv("KAFKA_CONSUMER_PARTITION", "0"))
+KAFKA_CONSUMER_INSTANCE_ID = os.getenv("KAFKA_CONSUMER_INSTANCE_ID", "order-service-0")
 
 app = Flask("order-service")
 _consumer_thread: threading.Thread | None = None
@@ -135,12 +138,18 @@ def handle_stock_subtracted_reply(message: StockSubtractedReply):
     # todo: implement with sagas, we need to keep track of all pending items somehow
     # since we are async, we send multiple requests to the stock service for each item
     # and we can only proceed with the payment when we have received all of them
-    app.logger.info("stock subtracted not yet implemented", message.order_id)
+    app.logger.info(
+        "stock subtracted not yet implemented order_id=%s",
+        message.order_id,
+    )
 
 
 def handle_payment_reply(message: PaymentReply):
     # todo: implement with sagas, we need to keep track of all pending checkouts somehow
-    app.logger.info("stock subtracted not yet implemented", message.order_id)
+    app.logger.info(
+        "payment reply handling not yet implemented order_id=%s",
+        message.order_id,
+    )
 
 
 def handle_rollback_stock_reply(message: RollbackStockReply):
@@ -179,8 +188,48 @@ def handle_message(message: BaseMessage):
     app.logger.warning(f"No handler registered for message type: {message.type}")
 
 
+def handle_http_command(command: dict):
+    # Handle gateway Kafka commands by calling existing local HTTP routes.
+    request_id = str(command.get("request_id", ""))
+    method = str(command.get("method", "GET")).upper()
+    action = str(command.get("action", "")).lstrip("/")
+    if not request_id or not action:
+        return
+
+    url = f"http://127.0.0.1:5000/{action}"
+    try:
+        if method == "POST":
+            response = requests.post(url, timeout=10)
+        else:
+            response = requests.get(url, timeout=10)
+        content_type = response.headers.get("Content-Type", "")
+        if "application/json" in content_type:
+            body = response.json()
+        else:
+            body = response.text
+        status_code = response.status_code
+    except Exception as e:
+        status_code = 500
+        body = {"error": str(e)}
+
+    publish_raw(
+        topic="gateway.order.replies",
+        key=request_id,
+        payload={
+            "request_id": request_id,
+            "status_code": status_code,
+            "body": body,
+        },
+        partition=KAFKA_CONSUMER_PARTITION,
+    )
+
+
 def consumer_loop():
-    app.logger.info("order consumer loop starting")
+    app.logger.info(
+        "order consumer loop starting partition=%s instance_id=%s",
+        KAFKA_CONSUMER_PARTITION,
+        KAFKA_CONSUMER_INSTANCE_ID,
+    )
     consumer = create_consumer(
         group_id="order-service",
         topics=[
@@ -189,9 +238,12 @@ def consumer_loop():
             "payment.replies",
             "rollback.stock.replies",
             "rollback.payment.replies",
+            "gateway.order.commands",
         ],
         auto_offset_reset="earliest",
         enable_auto_commit=False,
+        partition=KAFKA_CONSUMER_PARTITION,
+        group_instance_id=KAFKA_CONSUMER_INSTANCE_ID,
     )
 
     while True:
@@ -201,10 +253,20 @@ def consumer_loop():
             continue
 
         if msg.error():
-            app.logger.error("Kafka error: %s", msg.error())
+            error_str = str(msg.error())
+            if "NOT_COORDINATOR" in error_str:
+                app.logger.warning("Kafka coordinator not ready yet: %s", msg.error())
+            else:
+                app.logger.error("Kafka error: %s", msg.error())
             continue
 
         try:
+            if msg.topic() == "gateway.order.commands":
+                command = msgspec.json.decode(msg.value(), type=dict)
+                handle_http_command(command)
+                consumer.commit(message=msg)
+                continue
+
             message = decode_message(msg.value())
             key = msg.key().decode() if msg.key() else ""
             app.logger.info("consumed topic=%s key=%s type=%s", msg.topic(), key, message.type)
@@ -241,7 +303,7 @@ def get_order_from_db(order_id: str) -> OrderValue | None:
 
 @app.post('/create/<user_id>')
 def create_order(user_id: str):
-    key = str(uuid.uuid4())
+    key = f"s{KAFKA_CONSUMER_PARTITION}_{uuid.uuid4()}"
     value = msgpack.encode(OrderValue(paid=False, items=[], user_id=user_id, total_cost=0))
     try:
         db.set(key, value)

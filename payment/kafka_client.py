@@ -2,7 +2,7 @@ import os
 import logging
 
 import msgspec
-from confluent_kafka import Producer, Consumer
+from confluent_kafka import Producer, Consumer, TopicPartition, OFFSET_STORED
 from messages import BaseMessage, MESSAGE_TYPES
 
 BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:29092")
@@ -21,6 +21,21 @@ def publish(topic: str, key: str, value: BaseMessage):
     logger.info("published %s key=%s", topic, key)
 
 
+def publish_raw(topic: str, key: str, payload: dict, partition: int | None = None):
+    # Used for gateway command/reply envelopes that are plain JSON dicts.
+    kwargs = {}
+    if partition is not None:
+        kwargs["partition"] = partition
+    producer.produce(
+        topic,
+        key=key.encode(),
+        value=msgspec.json.encode(payload),
+        **kwargs,
+    )
+    producer.flush(2)
+    logger.info("published raw %s key=%s partition=%s", topic, key, partition)
+
+
 def decode_message(raw_value: bytes) -> BaseMessage:
     payload = msgspec.json.decode(raw_value, type=dict)
     message_type = payload.get("type")
@@ -37,12 +52,22 @@ def create_consumer(
     *,
     auto_offset_reset: str = "latest",
     enable_auto_commit: bool = False,
+    partition: int | None = None,
+    group_instance_id: str | None = None,
 ):
-    consumer = Consumer({
+    config = {
         "bootstrap.servers": BOOTSTRAP,
         "group.id": group_id,
         "auto.offset.reset": auto_offset_reset,
         "enable.auto.commit": enable_auto_commit,
-    })
-    consumer.subscribe(topics)
+    }
+    if group_instance_id:
+        config["group.instance.id"] = group_instance_id
+
+    consumer = Consumer(config)
+    if partition is None:
+        consumer.subscribe(topics)
+    else:
+        # Read from stored committed offsets for this group/partition.
+        consumer.assign([TopicPartition(topic, partition, OFFSET_STORED) for topic in topics])
     return consumer

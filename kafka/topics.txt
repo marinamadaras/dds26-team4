@@ -8,3 +8,9 @@ payment
 payment.replies
 rollback.payment
 rollback.payment.replies
+gateway.order.commands
+gateway.order.replies
+gateway.stock.commands
+gateway.stock.replies
+gateway.payment.commands
+gateway.payment.replies

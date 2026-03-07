@@ -6,9 +6,7 @@ services:
     ports:
       - "8000:80"
     depends_on:
-      - order-service
-      - stock-service
-      - payment-service
+      - api-gateway
 
   kafka:
     image: apache/kafka:latest
@@ -52,57 +50,219 @@ services:
       - ./kafka/topics.txt:/topics.txt
     entrypoint: [ "/bin/bash", "/init-topics.sh" ]
 
-  order-service:
+  api-gateway:
+    build: ./api-gateway
+    image: api-gateway:latest
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - KAFKA_PARTITIONS=3
+      - KAFKA_REQUEST_TIMEOUT_SECONDS=10
+    depends_on:
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+
+  order-service-0:
     build: ./order
     image: order:latest
     environment:
       - GATEWAY_URL=http://gateway:80
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
-    command: gunicorn -b 0.0.0.0:5000 -w 1 --timeout 30 --log-level=info app:app #todo: very important - look into the flags here for proper replication and partitioning, for each service
+      - KAFKA_CONSUMER_PARTITION=0
+      - KAFKA_CONSUMER_INSTANCE_ID=order-service-0
+      - REDIS_HOST=order-db-0
+    command: gunicorn -b 0.0.0.0:5000 -w 1 --timeout 30 --log-level=info app:app
     env_file:
       - env/order_redis.env
     depends_on:
-      order-db:
+      order-db-0:
         condition: service_started
       kafka:
         condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
 
-  order-db:
+  order-service-1:
+    image: order:latest
+    environment:
+      - GATEWAY_URL=http://gateway:80
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - KAFKA_CONSUMER_PARTITION=1
+      - KAFKA_CONSUMER_INSTANCE_ID=order-service-1
+      - REDIS_HOST=order-db-1
+    command: gunicorn -b 0.0.0.0:5000 -w 1 --timeout 30 --log-level=info app:app
+    env_file:
+      - env/order_redis.env
+    depends_on:
+      order-db-1:
+        condition: service_started
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+
+  order-service-2:
+    image: order:latest
+    environment:
+      - GATEWAY_URL=http://gateway:80
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - KAFKA_CONSUMER_PARTITION=2
+      - KAFKA_CONSUMER_INSTANCE_ID=order-service-2
+      - REDIS_HOST=order-db-2
+    command: gunicorn -b 0.0.0.0:5000 -w 1 --timeout 30 --log-level=info app:app
+    env_file:
+      - env/order_redis.env
+    depends_on:
+      order-db-2:
+        condition: service_started
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+
+  order-db-0:
     image: redis:7.2-bookworm
     command: redis-server --requirepass redis --maxmemory 512mb
 
-  stock-service:
+  order-db-1:
+    image: redis:7.2-bookworm
+    command: redis-server --requirepass redis --maxmemory 512mb
+
+  order-db-2:
+    image: redis:7.2-bookworm
+    command: redis-server --requirepass redis --maxmemory 512mb
+
+  stock-service-0:
     build: ./stock
     image: stock:latest
     environment:
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - KAFKA_CONSUMER_PARTITION=0
+      - KAFKA_CONSUMER_INSTANCE_ID=stock-service-0
+      - REDIS_HOST=stock-db-0
     command: gunicorn -b 0.0.0.0:5000 -w 1 --timeout 30 --log-level=info app:app
     env_file:
       - env/stock_redis.env
     depends_on:
-      stock-db:
+      stock-db-0:
         condition: service_started
       kafka:
         condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
 
-  stock-db:
+  stock-service-1:
+    image: stock:latest
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - KAFKA_CONSUMER_PARTITION=1
+      - KAFKA_CONSUMER_INSTANCE_ID=stock-service-1
+      - REDIS_HOST=stock-db-1
+    command: gunicorn -b 0.0.0.0:5000 -w 1 --timeout 30 --log-level=info app:app
+    env_file:
+      - env/stock_redis.env
+    depends_on:
+      stock-db-1:
+        condition: service_started
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+
+  stock-service-2:
+    image: stock:latest
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - KAFKA_CONSUMER_PARTITION=2
+      - KAFKA_CONSUMER_INSTANCE_ID=stock-service-2
+      - REDIS_HOST=stock-db-2
+    command: gunicorn -b 0.0.0.0:5000 -w 1 --timeout 30 --log-level=info app:app
+    env_file:
+      - env/stock_redis.env
+    depends_on:
+      stock-db-2:
+        condition: service_started
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+
+  stock-db-0:
     image: redis:7.2-bookworm
     command: redis-server --requirepass redis --maxmemory 512mb
 
-  payment-service:
+  stock-db-1:
+    image: redis:7.2-bookworm
+    command: redis-server --requirepass redis --maxmemory 512mb
+
+  stock-db-2:
+    image: redis:7.2-bookworm
+    command: redis-server --requirepass redis --maxmemory 512mb
+
+  payment-service-0:
     build: ./payment
     image: user:latest
     environment:
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - KAFKA_CONSUMER_PARTITION=0
+      - KAFKA_CONSUMER_INSTANCE_ID=payment-service-0
+      - REDIS_HOST=payment-db-0
     command: gunicorn -b 0.0.0.0:5000 -w 1 --timeout 30 --log-level=info app:app
     env_file:
       - env/payment_redis.env
     depends_on:
-      payment-db:
+      payment-db-0:
         condition: service_started
       kafka:
         condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
 
-  payment-db:
+  payment-service-1:
+    image: user:latest
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - KAFKA_CONSUMER_PARTITION=1
+      - KAFKA_CONSUMER_INSTANCE_ID=payment-service-1
+      - REDIS_HOST=payment-db-1
+    command: gunicorn -b 0.0.0.0:5000 -w 1 --timeout 30 --log-level=info app:app
+    env_file:
+      - env/payment_redis.env
+    depends_on:
+      payment-db-1:
+        condition: service_started
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+
+  payment-service-2:
+    image: user:latest
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - KAFKA_CONSUMER_PARTITION=2
+      - KAFKA_CONSUMER_INSTANCE_ID=payment-service-2
+      - REDIS_HOST=payment-db-2
+    command: gunicorn -b 0.0.0.0:5000 -w 1 --timeout 30 --log-level=info app:app
+    env_file:
+      - env/payment_redis.env
+    depends_on:
+      payment-db-2:
+        condition: service_started
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+
+  payment-db-0:
+    image: redis:7.2-bookworm
+    command: redis-server --requirepass redis --maxmemory 512mb
+
+  payment-db-1:
+    image: redis:7.2-bookworm
+    command: redis-server --requirepass redis --maxmemory 512mb
+
+  payment-db-2:
     image: redis:7.2-bookworm
     command: redis-server --requirepass redis --maxmemory 512mb
