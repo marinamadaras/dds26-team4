@@ -104,6 +104,12 @@ def subtract_stock_core(item_id: str, amount: int) -> StockValue:
 
 
 def handle_find_stock(message: FindStock, order_id: str):
+    cached = get_operation_record(message.idempotency_key)
+    if cached is not None and cached.success:
+        # already processed — but we don't store the reply so we can't replay it
+        # just skip, order service already has the item
+        return
+
     app.logger.info("received find.stock request order_id=%s item_id=%s qty=%s", order_id, message.item_id, message.quantity)
     item_entry = get_item_from_db_nullable(message.item_id)
     if item_entry is None:
@@ -125,6 +131,7 @@ def handle_find_stock(message: FindStock, order_id: str):
             price=item_entry.price,
         )
 
+    store_operation_record(message.idempotency_key, True, None)
     publish(
         topic="find.stock.replies",
         key=order_id,
