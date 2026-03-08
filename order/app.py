@@ -665,7 +665,7 @@ def get_order_from_db(order_id: str) -> OrderValue | None:
 def create_order(user_id: str):
     key = str(uuid.uuid4())
     value = msgpack.encode(OrderValue(items=[], user_id=user_id, total_cost=0,expected_items=0,
-            stock_confirmations=0))
+            stock_confirmations=0,rollback_stock_confirmations=0))
     try:
         db.set(key, value)
     except redis.exceptions.RedisError:
