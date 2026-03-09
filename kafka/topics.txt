@@ -17,3 +17,9 @@ checkout.requested
 2pc.payment.prepare.replies
 2pc.payment.decision
 2pc.payment.decision.replies
+gateway.order.commands
+gateway.order.replies
+gateway.stock.commands
+gateway.stock.replies
+gateway.payment.commands
+gateway.payment.replies
