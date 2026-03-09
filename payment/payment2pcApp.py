@@ -15,6 +15,10 @@ from messages import (
     PaymentReply,
     RollbackPaymentRequest,
     RollbackPaymentReply,
+    PreparePaymentRequest,
+    PreparePaymentReply,
+    PaymentDecisionRequest,
+    PaymentDecisionReply,
 )
 
 DB_ERROR_STR = "DB error"
@@ -111,6 +115,12 @@ def handle_message(message: BaseMessage):
     if isinstance(message, RollbackPaymentRequest):
         handle_rollback_payment_request(message)
         return
+    if isinstance(message, PreparePaymentRequest):
+        handle_prepare_payment_message(message)
+        return
+    if isinstance(message, PaymentDecisionRequest):
+        handle_payment_decision_message(message)
+        return
     app.logger.warning("No handler for message type=%s", message.type)
 
 
@@ -126,11 +136,39 @@ def handle_rollback_payment_request(message: RollbackPaymentRequest):
     publish(topic="rollback.payment.replies", key=message.order_id, value=reply)
 
 
+def handle_prepare_payment_message(message: PreparePaymentRequest):
+    success, error = prepare_payment_tx(message.tx_id, message.user_id, int(message.amount))
+    reply = PreparePaymentReply(tx_id=message.tx_id, success=success, error=error)
+    publish(topic="2pc.payment.prepare.replies", key=message.tx_id, value=reply)
+
+
+def handle_payment_decision_message(message: PaymentDecisionRequest):
+    decision = str(message.decision).upper()
+    if decision == "COMMIT":
+        success, error = commit_payment_tx(message.tx_id)
+    elif decision == "ABORT":
+        success, error = abort_payment_tx(message.tx_id)
+    else:
+        success, error = False, "Unsupported decision"
+    reply = PaymentDecisionReply(
+        tx_id=message.tx_id,
+        decision=decision,
+        success=success,
+        error=error,
+    )
+    publish(topic="2pc.payment.decision.replies", key=message.tx_id, value=reply)
+
+
 def consumer_loop():
     app.logger.info("payment consumer loop starting")
     consumer = create_consumer(
         group_id="payment-service",
-        topics=["payment", "rollback.payment"],
+        topics=[
+            "payment",
+            "rollback.payment",
+            "2pc.payment.prepare",
+            "2pc.payment.decision",
+        ],
         auto_offset_reset="earliest",
         enable_auto_commit=False,
     )
@@ -225,15 +263,22 @@ def prepare_payment(tx_id: str):
     amount = payload.get("amount")
     if user_id is None or amount is None:
         abort(400, "user_id and amount payload are required")
+    success, error = prepare_payment_tx(tx_id, str(user_id), int(amount))
+    if not success:
+        abort(400, error or "Payment prepare failed")
+    return Response("Payment prepare acknowledged", status=200)
+
+
+def prepare_payment_tx(tx_id: str, user_id: str, amount: int) -> tuple[bool, str | None]:
     user_id = str(user_id)
-    amount = int(amount) 
+    amount = int(amount)
     if amount < 0:
-        abort(400, "amount cannot be negative")
+        return False, "amount cannot be negative"
 
     tx_key = f"tx:{tx_id}"
     user_key = user_id
 
-    #ensures reservation and tx record are written atomically.
+    # Ensures reservation and tx record are written atomically.
     for _ in range(5):
         pipe = db.pipeline()
         try:
@@ -241,20 +286,18 @@ def prepare_payment(tx_id: str):
             existing_tx_raw = pipe.get(tx_key)
             if existing_tx_raw:
                 existing_tx: PaymentTransaction = msgpack.decode(existing_tx_raw, type=PaymentTransaction)
-                # Duplicate prepare for same tx_id is safe and returns success.
                 if existing_tx.state in {"PREPARED", "COMMITTED"}:
-                    return Response("Payment prepare acknowledged", status=200)
+                    return True, None
                 if existing_tx.state == "ABORTED":
-                    abort(400, "Transaction already aborted")
-                abort(400, "Transaction in invalid state")
+                    return False, "Transaction already aborted"
+                return False, "Transaction in invalid state"
 
             user_raw = pipe.get(user_key)
             user_entry: UserValue | None = msgpack.decode(user_raw, type=UserValue) if user_raw else None
             if user_entry is None:
-                abort(400, f"User: {user_id} not found!")
-            # Only unreserved credit can be newly reserved.
+                return False, f"User: {user_id} not found!"
             if user_entry.credit - user_entry.reserved < amount:
-                abort(400, f"User: {user_id} credit cannot get reduced below zero!")
+                return False, f"User: {user_id} credit cannot get reduced below zero!"
 
             user_entry.reserved += amount
             pipe.multi()
@@ -265,54 +308,60 @@ def prepare_payment(tx_id: str):
                 amount=amount
             )))
             pipe.execute()
-            return Response("Payment prepare acknowledged", status=200)
+            return True, None
         except redis.exceptions.WatchError:
             continue
         except redis.exceptions.RedisError:
-            abort(400, DB_ERROR_STR)
+            return False, DB_ERROR_STR
         finally:
             pipe.reset()
-    abort(409, "Concurrent update conflict while preparing payment")
+    return False, "Concurrent update conflict while preparing payment"
 
 
 @app.post('/commit/<tx_id>')
 def commit_payment(tx_id: str):
+    success, error = commit_payment_tx(tx_id)
+    if not success:
+        abort(400, error or "Payment commit failed")
+    return Response("Payment commit acknowledged", status=200)
+
+
+def commit_payment_tx(tx_id: str) -> tuple[bool, str | None]:
     tx_key = f"tx:{tx_id}"
     tx: PaymentTransaction | None = get_payment_tx(tx_id)
     if tx is None:
-        abort(400, "Transaction not found")
+        return False, "Transaction not found"
     if tx.state == "COMMITTED":
-        return Response("Payment commit acknowledged", status=200)
+        return True, None
     if tx.state == "ABORTED":
-        abort(400, "Transaction already aborted")
+        return False, "Transaction already aborted"
     if tx.state != "PREPARED":
-        abort(400, "Transaction not prepared")
+        return False, "Transaction not prepared"
 
-    # Commit consumes previously reserved funds; repeated commit is idempotent.
     for _ in range(5):
         pipe = db.pipeline()
         try:
             pipe.watch(tx_key, tx.user_id)
             current_tx_raw = pipe.get(tx_key)
             if not current_tx_raw:
-                abort(400, "Transaction not found")
+                return False, "Transaction not found"
             current_tx: PaymentTransaction = msgpack.decode(current_tx_raw, type=PaymentTransaction)
             if current_tx.state == "COMMITTED":
-                return Response("Payment commit acknowledged", status=200)
+                return True, None
             if current_tx.state == "ABORTED":
-                abort(400, "Transaction already aborted")
+                return False, "Transaction already aborted"
             if current_tx.state != "PREPARED":
-                abort(400, "Transaction not prepared")
+                return False, "Transaction not prepared"
 
             user_raw = pipe.get(current_tx.user_id)
             user_entry: UserValue | None = msgpack.decode(user_raw, type=UserValue) if user_raw else None
             if user_entry is None or user_entry.reserved < current_tx.amount:
-                abort(400, "Invalid payment reservation")
+                return False, "Invalid payment reservation"
 
             user_entry.reserved -= current_tx.amount
             user_entry.credit -= current_tx.amount
             if user_entry.credit < 0:
-                abort(400, f"User: {current_tx.user_id} credit cannot get reduced below zero!")
+                return False, f"User: {current_tx.user_id} credit cannot get reduced below zero!"
 
             pipe.multi()
             pipe.set(current_tx.user_id, msgpack.encode(user_entry))
@@ -322,49 +371,55 @@ def commit_payment(tx_id: str):
                 amount=current_tx.amount
             )))
             pipe.execute()
-            return Response("Payment commit acknowledged", status=200)
+            return True, None
         except redis.exceptions.WatchError:
             continue
         except redis.exceptions.RedisError:
-            abort(400, DB_ERROR_STR)
+            return False, DB_ERROR_STR
         finally:
             pipe.reset()
-    abort(409, "Concurrent update conflict while committing payment")
+    return False, "Concurrent update conflict while committing payment"
 
 
 @app.post('/abort/<tx_id>')
 def abort_payment(tx_id: str):
+    success, error = abort_payment_tx(tx_id)
+    if not success:
+        abort(400, error or "Payment abort failed")
+    return Response("Payment abort acknowledged", status=200)
+
+
+def abort_payment_tx(tx_id: str) -> tuple[bool, str | None]:
     tx_key = f"tx:{tx_id}"
     tx: PaymentTransaction | None = get_payment_tx(tx_id)
     if tx is None:
-        return Response("Payment abort acknowledged", status=200)
+        return True, None
     if tx.state == "ABORTED":
-        return Response("Payment abort acknowledged", status=200)
+        return True, None
     if tx.state == "COMMITTED":
-        abort(400, "Transaction already committed")
+        return False, "Transaction already committed"
     if tx.state != "PREPARED":
-        abort(400, "Transaction not prepared")
+        return False, "Transaction not prepared"
 
-    # Abort only releases the reservation and never modifies final credit.
     for _ in range(5):
         pipe = db.pipeline()
         try:
             pipe.watch(tx_key, tx.user_id)
             current_tx_raw = pipe.get(tx_key)
             if not current_tx_raw:
-                return Response("Payment abort acknowledged", status=200)
+                return True, None
             current_tx: PaymentTransaction = msgpack.decode(current_tx_raw, type=PaymentTransaction)
             if current_tx.state == "ABORTED":
-                return Response("Payment abort acknowledged", status=200)
+                return True, None
             if current_tx.state == "COMMITTED":
-                abort(400, "Transaction already committed")
+                return False, "Transaction already committed"
             if current_tx.state != "PREPARED":
-                abort(400, "Transaction not prepared")
+                return False, "Transaction not prepared"
 
             user_raw = pipe.get(current_tx.user_id)
             user_entry: UserValue | None = msgpack.decode(user_raw, type=UserValue) if user_raw else None
             if user_entry is None or user_entry.reserved < current_tx.amount:
-                abort(400, "Invalid payment reservation")
+                return False, "Invalid payment reservation"
 
             user_entry.reserved -= current_tx.amount
             pipe.multi()
@@ -375,14 +430,14 @@ def abort_payment(tx_id: str):
                 amount=current_tx.amount
             )))
             pipe.execute()
-            return Response("Payment abort acknowledged", status=200)
+            return True, None
         except redis.exceptions.WatchError:
             continue
         except redis.exceptions.RedisError:
-            abort(400, DB_ERROR_STR)
+            return False, DB_ERROR_STR
         finally:
             pipe.reset()
-    abort(409, "Concurrent update conflict while aborting payment")
+    return False, "Concurrent update conflict while aborting payment"
 
 
 if __name__ == '__main__':

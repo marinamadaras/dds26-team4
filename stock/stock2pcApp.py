@@ -18,6 +18,10 @@ from messages import (
     StockSubtractedReply,
     RollbackStockRequest,
     RollbackStockReply,
+    PrepareStockRequest,
+    PrepareStockReply,
+    StockDecisionRequest,
+    StockDecisionReply,
 )
 
 
@@ -141,6 +145,12 @@ def handle_message(message: BaseMessage, key: str):
     if isinstance(message, RollbackStockRequest):
         handle_rollback_stock(message)
         return
+    if isinstance(message, PrepareStockRequest):
+        handle_prepare_stock_message(message)
+        return
+    if isinstance(message, StockDecisionRequest):
+        handle_stock_decision_message(message)
+        return
     app.logger.warning(f"No handler registered for message type: {message.type}")
 
 
@@ -183,11 +193,40 @@ def handle_rollback_stock(message: RollbackStockRequest):
         value=reply,
     )
 
+
+def handle_prepare_stock_message(message: PrepareStockRequest):
+    success, error = prepare_stock_tx(message.tx_id, message.items)
+    reply = PrepareStockReply(tx_id=message.tx_id, success=success, error=error)
+    publish(topic="2pc.stock.prepare.replies", key=message.tx_id, value=reply)
+
+
+def handle_stock_decision_message(message: StockDecisionRequest):
+    decision = str(message.decision).upper()
+    if decision == "COMMIT":
+        success, error = commit_stock_tx(message.tx_id)
+    elif decision == "ABORT":
+        success, error = abort_stock_tx(message.tx_id)
+    else:
+        success, error = False, "Unsupported decision"
+    reply = StockDecisionReply(
+        tx_id=message.tx_id,
+        decision=decision,
+        success=success,
+        error=error,
+    )
+    publish(topic="2pc.stock.decision.replies", key=message.tx_id, value=reply)
+
 def consumer_loop():
     app.logger.info("stock consumer loop starting")
     consumer = create_consumer(
         group_id="stock-service",
-        topics=["find.stock", "subtract.stock", "rollback.stock"],
+        topics=[
+            "find.stock",
+            "subtract.stock",
+            "rollback.stock",
+            "2pc.stock.prepare",
+            "2pc.stock.decision",
+        ],
         auto_offset_reset="earliest",
         enable_auto_commit=False,
     )
@@ -287,11 +326,19 @@ def prepare_stock(tx_id: str):
     raw_items = payload.get("items")
     if not isinstance(raw_items, list) or len(raw_items) == 0:
         abort(400, "items payload is required")
+    parsed_items = [(str(item_id), int(quantity)) for item_id, quantity in raw_items]
+    success, error = prepare_stock_tx(tx_id, parsed_items)
+    if not success:
+        abort(400, error or "Stock prepare failed")
+    return Response("Stock prepare acknowledged", status=200)
 
+
+def prepare_stock_tx(tx_id: str, raw_items: list[tuple[str, int]]) -> tuple[bool, str | None]:
+    if len(raw_items) == 0:
+        return False, "items payload is required"
     items = aggregate_items([(str(item_id), int(quantity)) for item_id, quantity in raw_items])
     tx_key = f"tx:{tx_id}"
 
-    # WATCH/MULTI keeps "reserve stock + persist tx" as one atomic step.
     for _ in range(5):
         pipe = db.pipeline()
         try:
@@ -303,11 +350,10 @@ def prepare_stock(tx_id: str):
             if existing_tx_raw:
                 existing_tx: StockTransaction = msgpack.decode(existing_tx_raw, type=StockTransaction)
                 if existing_tx.state in {"PREPARED", "COMMITTED"}:
-                    # Duplicate prepare for same tx_id is intentionally accepted.
-                    return Response("Stock prepare acknowledged", status=200)
+                    return True, None
                 if existing_tx.state == "ABORTED":
-                    abort(400, "Transaction already aborted")
-                abort(400, "Transaction in invalid state")
+                    return False, "Transaction already aborted"
+                return False, "Transaction in invalid state"
 
             entries = pipe.mget(item_keys)
             decoded_items: list[StockValue] = []
@@ -315,10 +361,9 @@ def prepare_stock(tx_id: str):
             for item_id, quantity, entry in zip(item_keys, item_quantities, entries):
                 decoded = msgpack.decode(entry, type=StockValue) if entry else None
                 if decoded is None:
-                    abort(400, f"Item: {item_id} not found!")
-                # Only currently unreserved stock can be reserved by this tx.
+                    return False, f"Item: {item_id} not found!"
                 if decoded.stock - decoded.reserved < quantity:
-                    abort(400, f'Out of stock on item_id: {item_id}')
+                    return False, f'Out of stock on item_id: {item_id}'
                 decoded_items.append(decoded)
 
             pipe.multi()
@@ -327,30 +372,36 @@ def prepare_stock(tx_id: str):
                 pipe.set(item_id, msgpack.encode(item_entry))
             pipe.set(tx_key, msgpack.encode(StockTransaction(state="PREPARED", items=items)))
             pipe.execute()
-            return Response("Stock prepare acknowledged", status=200)
+            return True, None
         except redis.exceptions.WatchError:
             continue
         except redis.exceptions.RedisError:
-            abort(400, DB_ERROR_STR)
+            return False, DB_ERROR_STR
         finally:
             pipe.reset()
-    abort(409, "Concurrent update conflict while preparing stock")
+    return False, "Concurrent update conflict while preparing stock"
 
 
 @app.post('/commit/<tx_id>')
 def commit_stock(tx_id: str):
+    success, error = commit_stock_tx(tx_id)
+    if not success:
+        abort(400, error or "Stock commit failed")
+    return Response("Stock commit acknowledged", status=200)
+
+
+def commit_stock_tx(tx_id: str) -> tuple[bool, str | None]:
     tx_key = f"tx:{tx_id}"
     tx: StockTransaction | None = get_stock_tx(tx_id)
     if tx is None:
-        abort(400, "Transaction not found")
+        return False, "Transaction not found"
     if tx.state == "COMMITTED":
-        return Response("Stock commit acknowledged", status=200)
+        return True, None
     if tx.state == "ABORTED":
-        abort(400, "Transaction already aborted")
+        return False, "Transaction already aborted"
     if tx.state != "PREPARED":
-        abort(400, "Transaction not prepared")
+        return False, "Transaction not prepared"
 
-    # Commit turns reservation into final deduction; repeats are idempotent.
     for _ in range(5):
         pipe = db.pipeline()
         try:
@@ -358,14 +409,14 @@ def commit_stock(tx_id: str):
             pipe.watch(tx_key, *item_keys)
             current_tx_raw = pipe.get(tx_key)
             if not current_tx_raw:
-                abort(400, "Transaction not found")
+                return False, "Transaction not found"
             current_tx: StockTransaction = msgpack.decode(current_tx_raw, type=StockTransaction)
             if current_tx.state == "COMMITTED":
-                return Response("Stock commit acknowledged", status=200)
+                return True, None
             if current_tx.state == "ABORTED":
-                abort(400, "Transaction already aborted")
+                return False, "Transaction already aborted"
             if current_tx.state != "PREPARED":
-                abort(400, "Transaction not prepared")
+                return False, "Transaction not prepared"
 
             entries = pipe.mget(item_keys)
             decoded_items: list[StockValue] = []
@@ -374,7 +425,7 @@ def commit_stock(tx_id: str):
             for item_id, quantity, entry in zip(item_keys, item_quantities, entries):
                 decoded = msgpack.decode(entry, type=StockValue) if entry else None
                 if decoded is None or decoded.reserved < quantity:
-                    abort(400, f"Invalid stock reservation for item: {item_id}")
+                    return False, f"Invalid stock reservation for item: {item_id}"
                 decoded_items.append(decoded)
 
             pipe.multi()
@@ -382,34 +433,40 @@ def commit_stock(tx_id: str):
                 item_entry.reserved -= quantity
                 item_entry.stock -= quantity
                 if item_entry.stock < 0:
-                    abort(400, f"Item: {item_id} stock cannot get reduced below zero!")
+                    return False, f"Item: {item_id} stock cannot get reduced below zero!"
                 pipe.set(item_id, msgpack.encode(item_entry))
             pipe.set(tx_key, msgpack.encode(StockTransaction(state="COMMITTED", items=tx_items)))
             pipe.execute()
-            return Response("Stock commit acknowledged", status=200)
+            return True, None
         except redis.exceptions.WatchError:
             continue
         except redis.exceptions.RedisError:
-            abort(400, DB_ERROR_STR)
+            return False, DB_ERROR_STR
         finally:
             pipe.reset()
-    abort(409, "Concurrent update conflict while committing stock")
+    return False, "Concurrent update conflict while committing stock"
 
 
 @app.post('/abort/<tx_id>')
 def abort_stock(tx_id: str):
+    success, error = abort_stock_tx(tx_id)
+    if not success:
+        abort(400, error or "Stock abort failed")
+    return Response("Stock abort acknowledged", status=200)
+
+
+def abort_stock_tx(tx_id: str) -> tuple[bool, str | None]:
     tx_key = f"tx:{tx_id}"
     tx: StockTransaction | None = get_stock_tx(tx_id)
     if tx is None:
-        return Response("Stock abort acknowledged", status=200)
+        return True, None
     if tx.state == "ABORTED":
-        return Response("Stock abort acknowledged", status=200)
+        return True, None
     if tx.state == "COMMITTED":
-        abort(400, "Transaction already committed")
+        return False, "Transaction already committed"
     if tx.state != "PREPARED":
-        abort(400, "Transaction not prepared")
+        return False, "Transaction not prepared"
 
-    # Abort only releases reservations and never decrements final stock.
     for _ in range(5):
         pipe = db.pipeline()
         try:
@@ -417,14 +474,14 @@ def abort_stock(tx_id: str):
             pipe.watch(tx_key, *item_keys)
             current_tx_raw = pipe.get(tx_key)
             if not current_tx_raw:
-                return Response("Stock abort acknowledged", status=200)
+                return True, None
             current_tx: StockTransaction = msgpack.decode(current_tx_raw, type=StockTransaction)
             if current_tx.state == "ABORTED":
-                return Response("Stock abort acknowledged", status=200)
+                return True, None
             if current_tx.state == "COMMITTED":
-                abort(400, "Transaction already committed")
+                return False, "Transaction already committed"
             if current_tx.state != "PREPARED":
-                abort(400, "Transaction not prepared")
+                return False, "Transaction not prepared"
 
             entries = pipe.mget(item_keys)
             decoded_items: list[StockValue] = []
@@ -433,7 +490,7 @@ def abort_stock(tx_id: str):
             for item_id, quantity, entry in zip(item_keys, item_quantities, entries):
                 decoded = msgpack.decode(entry, type=StockValue) if entry else None
                 if decoded is None or decoded.reserved < quantity:
-                    abort(400, f"Invalid stock reservation for item: {item_id}")
+                    return False, f"Invalid stock reservation for item: {item_id}"
                 decoded_items.append(decoded)
 
             pipe.multi()
@@ -442,14 +499,14 @@ def abort_stock(tx_id: str):
                 pipe.set(item_id, msgpack.encode(item_entry))
             pipe.set(tx_key, msgpack.encode(StockTransaction(state="ABORTED", items=tx_items)))
             pipe.execute()
-            return Response("Stock abort acknowledged", status=200)
+            return True, None
         except redis.exceptions.WatchError:
             continue
         except redis.exceptions.RedisError:
-            abort(400, DB_ERROR_STR)
+            return False, DB_ERROR_STR
         finally:
             pipe.reset()
-    abort(409, "Concurrent update conflict while aborting stock")
+    return False, "Concurrent update conflict while aborting stock"
 
 
 if __name__ == '__main__':

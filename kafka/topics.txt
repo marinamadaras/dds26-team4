@@ -9,3 +9,11 @@ payment.replies
 rollback.payment
 rollback.payment.replies
 checkout.requested
+2pc.stock.prepare
+2pc.stock.prepare.replies
+2pc.stock.decision
+2pc.stock.decision.replies
+2pc.payment.prepare
+2pc.payment.prepare.replies
+2pc.payment.decision
+2pc.payment.decision.replies

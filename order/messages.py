@@ -44,6 +44,61 @@ class CheckoutRequested(BaseMessage):
     type: str = "CheckoutRequested"
 
 
+class PrepareStockRequest(BaseMessage):
+    tx_id: str
+    items: list[tuple[str, int]]
+    type: str = "PrepareStockRequest"
+
+
+class PrepareStockReply(BaseMessage):
+    tx_id: str
+    success: bool
+    error: str | None = None
+    type: str = "PrepareStockReply"
+
+
+class PreparePaymentRequest(BaseMessage):
+    tx_id: str
+    user_id: str
+    amount: int
+    type: str = "PreparePaymentRequest"
+
+
+class PreparePaymentReply(BaseMessage):
+    tx_id: str
+    success: bool
+    error: str | None = None
+    type: str = "PreparePaymentReply"
+
+
+class StockDecisionRequest(BaseMessage):
+    tx_id: str
+    decision: str
+    type: str = "StockDecisionRequest"
+
+
+class StockDecisionReply(BaseMessage):
+    tx_id: str
+    decision: str
+    success: bool
+    error: str | None = None
+    type: str = "StockDecisionReply"
+
+
+class PaymentDecisionRequest(BaseMessage):
+    tx_id: str
+    decision: str
+    type: str = "PaymentDecisionRequest"
+
+
+class PaymentDecisionReply(BaseMessage):
+    tx_id: str
+    decision: str
+    success: bool
+    error: str | None = None
+    type: str = "PaymentDecisionReply"
+
+
 # incoming message to Order service
 class FindStockReply(BaseMessage):
     order_id: str
@@ -102,4 +157,12 @@ MESSAGE_TYPES: dict[str, type[BaseMessage]] = {
     "RollbackPaymentRequest": RollbackPaymentRequest,
     "RollbackPaymentReply": RollbackPaymentReply,
     "CheckoutRequested": CheckoutRequested,
+    "PrepareStockRequest": PrepareStockRequest,
+    "PrepareStockReply": PrepareStockReply,
+    "PreparePaymentRequest": PreparePaymentRequest,
+    "PreparePaymentReply": PreparePaymentReply,
+    "StockDecisionRequest": StockDecisionRequest,
+    "StockDecisionReply": StockDecisionReply,
+    "PaymentDecisionRequest": PaymentDecisionRequest,
+    "PaymentDecisionReply": PaymentDecisionReply,
 }
