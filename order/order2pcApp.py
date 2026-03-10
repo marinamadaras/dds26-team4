@@ -6,12 +6,14 @@ import uuid
 import threading
 from collections import defaultdict
 
+import msgspec
 import redis
+import requests
 
 from msgspec import msgpack, Struct
 from flask import Flask, jsonify, abort, Response
 
-from kafka_client import publish, create_consumer, decode_message
+from kafka_client import publish, publish_raw, create_consumer, decode_message
 from messages import (
     BaseMessage,
     SubtractStock,
@@ -34,7 +36,8 @@ from messages import (
     PaymentDecisionRequest,
     PaymentDecisionReply,
 )
-
+KAFKA_CONSUMER_INSTANCE_ID = os.getenv("KAFKA_CONSUMER_INSTANCE_ID", "order-service-0")
+KAFKA_CONSUMER_PARTITION = int(os.getenv("KAFKA_CONSUMER_PARTITION", "0"))
 DB_ERROR_STR = "DB error"
 app = Flask("order-service")
 _consumer_thread: threading.Thread | None = None
@@ -192,6 +195,41 @@ def handle_rollback_payment_reply(message: RollbackPaymentReply):
         message.success,
     )
 
+def handle_http_command(command: dict):
+    # Handle gateway Kafka commands by calling existing local HTTP routes.
+    request_id = str(command.get("request_id", ""))
+    method = str(command.get("method", "GET")).upper()
+    action = str(command.get("action", "")).lstrip("/")
+    if not request_id or not action:
+        return
+
+    url = f"http://127.0.0.1:5000/{action}"
+    try:
+        if method == "POST":
+            response = requests.post(url, timeout=10)
+        else:
+            response = requests.get(url, timeout=10)
+        content_type = response.headers.get("Content-Type", "")
+        if "application/json" in content_type:
+            body = response.json()
+        else:
+            body = response.text
+        status_code = response.status_code
+    except Exception as e:
+        status_code = 500
+        body = {"error": str(e)}
+
+    publish_raw(
+        topic="gateway.order.replies",
+        key=request_id,
+        payload={
+            "request_id": request_id,
+            "status_code": status_code,
+            "body": body,
+        },
+        partition=KAFKA_CONSUMER_PARTITION,
+    )
+
 
 def _is_prepare_phase_complete(tx: "CheckoutTransaction") -> bool:
     return tx.stock_prepare_done and tx.payment_prepare_done
@@ -339,9 +377,12 @@ def consumer_loop():
             "2pc.payment.prepare.replies",
             "2pc.stock.decision.replies",
             "2pc.payment.decision.replies",
+            "gateway.order.commands",
         ],
         auto_offset_reset="earliest",
         enable_auto_commit=False,
+        partition=KAFKA_CONSUMER_PARTITION,
+        group_instance_id=KAFKA_CONSUMER_INSTANCE_ID,
     )
 
     while True:
@@ -355,6 +396,12 @@ def consumer_loop():
             continue
 
         try:
+            if msg.topic() == "gateway.order.commands":
+                command = msgspec.json.decode(msg.value(), type=dict)
+                handle_http_command(command)
+                consumer.commit(message=msg)
+                continue
+
             message = decode_message(msg.value())
             key = msg.key().decode() if msg.key() else ""
             app.logger.info("consumed topic=%s key=%s type=%s", msg.topic(), key, message.type)
@@ -557,7 +604,7 @@ def process_checkout_async(order_id: str):
 
 @app.post('/create/<user_id>')
 def create_order(user_id: str):
-    key = str(uuid.uuid4())
+    key = f"s{KAFKA_CONSUMER_PARTITION}_{uuid.uuid4()}"
     value = msgpack.encode(OrderValue(paid=False, items=[], user_id=user_id, total_cost=0))
     try:
         db.set(key, value)

@@ -2,7 +2,7 @@ import os
 import logging
 
 import msgspec
-from confluent_kafka import Producer, Consumer, TopicPartition, OFFSET_STORED
+from confluent_kafka import Producer, Consumer, TopicPartition, OFFSET_END
 from messages import BaseMessage, MESSAGE_TYPES
 
 BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:29092")
@@ -68,6 +68,12 @@ def create_consumer(
     if partition is None:
         consumer.subscribe(topics)
     else:
-        # Read from stored committed offsets for this group/partition.
-        consumer.assign([TopicPartition(topic, partition, OFFSET_STORED) for topic in topics])
+        topic_partitions = [TopicPartition(topic, partition) for topic in topics]
+        committed = consumer.committed(topic_partitions, timeout=5.0)
+        # If there is no committed offset yet, start from end so only new commands are consumed.
+        assigned = [
+            TopicPartition(tp.topic, tp.partition, tp.offset if tp.offset >= 0 else OFFSET_END)
+            for tp in committed
+        ]
+        consumer.assign(assigned)
     return consumer

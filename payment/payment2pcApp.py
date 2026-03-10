@@ -3,12 +3,15 @@ import os
 import atexit
 import threading
 import uuid
+import urllib.error
+import urllib.request
 
+import msgspec
 import redis
 
 from msgspec import msgpack, Struct
 from flask import Flask, jsonify, abort, Response, request
-from kafka_client import publish, create_consumer, decode_message
+from kafka_client import publish, publish_raw, create_consumer, decode_message
 from messages import (
     BaseMessage,
     PaymentRequest,
@@ -20,8 +23,10 @@ from messages import (
     PaymentDecisionRequest,
     PaymentDecisionReply,
 )
-
 DB_ERROR_STR = "DB error"
+KAFKA_CONSUMER_PARTITION = int(os.getenv("KAFKA_CONSUMER_PARTITION", "0"))
+KAFKA_CONSUMER_INSTANCE_ID = os.getenv("KAFKA_CONSUMER_INSTANCE_ID", "payment-service-0")
+
 
 
 app = Flask("payment-service")
@@ -160,7 +165,11 @@ def handle_payment_decision_message(message: PaymentDecisionRequest):
 
 
 def consumer_loop():
-    app.logger.info("payment consumer loop starting")
+    app.logger.info(
+        "payment consumer loop starting partition=%s instance_id=%s",
+        KAFKA_CONSUMER_PARTITION,
+        KAFKA_CONSUMER_INSTANCE_ID,
+    )
     consumer = create_consumer(
         group_id="payment-service",
         topics=[
@@ -168,9 +177,12 @@ def consumer_loop():
             "rollback.payment",
             "2pc.payment.prepare",
             "2pc.payment.decision",
+            "gateway.payment.commands",
         ],
         auto_offset_reset="earliest",
         enable_auto_commit=False,
+        partition=KAFKA_CONSUMER_PARTITION,
+        group_instance_id=KAFKA_CONSUMER_INSTANCE_ID,
     )
     while True:
         msg = consumer.poll(1.0)
@@ -180,6 +192,12 @@ def consumer_loop():
             app.logger.error("Kafka error: %s", msg.error())
             continue
         try:
+
+            if msg.topic() == "gateway.payment.commands":
+                command = msgspec.json.decode(msg.value(), type=dict)
+                handle_http_command(command)
+                consumer.commit(message=msg)
+                continue
             message = decode_message(msg.value())
             handle_message(message)
             consumer.commit(message=msg)
@@ -187,6 +205,44 @@ def consumer_loop():
             app.logger.exception("Processing error in payment consumer: %s", e)
             consumer.commit(message=msg)
 
+
+
+def handle_http_command(command: dict):
+    # Handle gateway Kafka commands by calling existing local HTTP routes.
+    request_id = str(command.get("request_id", ""))
+    method = str(command.get("method", "GET")).upper()
+    action = str(command.get("action", "")).lstrip("/")
+    if not request_id or not action:
+        return
+
+    url = f"http://127.0.0.1:5000/{action}"
+    try:
+        req = urllib.request.Request(url=url, method=method)
+        with urllib.request.urlopen(req, timeout=10) as response:
+            payload = response.read().decode()
+            content_type = response.headers.get("Content-Type", "")
+            if "application/json" in content_type:
+                body: object = msgspec.json.decode(payload.encode(), type=dict)
+            else:
+                body = payload
+            status_code = int(response.status)
+    except urllib.error.HTTPError as e:
+        body = e.read().decode()
+        status_code = int(e.code)
+    except Exception as e:
+        body = {"error": str(e)}
+        status_code = 500
+
+    publish_raw(
+        topic="gateway.payment.replies",
+        key=request_id,
+        payload={
+            "request_id": request_id,
+            "status_code": status_code,
+            "body": body,
+        },
+        partition=KAFKA_CONSUMER_PARTITION,
+    )
 
 def start_consumer():
     global _consumer_thread
@@ -200,7 +256,7 @@ def start_consumer():
 
 @app.post('/create_user')
 def create_user():
-    key = str(uuid.uuid4())
+    key = f"p{KAFKA_CONSUMER_PARTITION}_{uuid.uuid4()}"
     value = msgpack.encode(UserValue(credit=0))
     try:
         db.set(key, value)

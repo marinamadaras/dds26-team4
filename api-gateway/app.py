@@ -27,6 +27,20 @@ def _partition_from_order_id(order_id: str) -> int:
     return _partition_from_hash(order_id)
 
 
+def _partition_from_item_id(item_id: str) -> int:
+    match = re.match(r"^t(\d+)_", item_id)
+    if match:
+        return int(match.group(1)) % PARTITIONS
+    return _partition_from_hash(item_id)
+
+
+def _partition_from_user_id(user_id: str) -> int:
+    match = re.match(r"^p(\d+)_", user_id)
+    if match:
+        return int(match.group(1)) % PARTITIONS
+    return _partition_from_hash(user_id)
+
+
 def _send_command(
     command_topic: str,
     reply_topic: str,
@@ -166,7 +180,7 @@ def stock_create(price: int):
 @app.get("/stock/find/<item_id>")
 @app.get("/find_stock/<item_id>")
 def stock_find(item_id: str):
-    partition = _partition_from_hash(item_id)
+    partition = _partition_from_item_id(item_id)
     status, body = _send_command(
         command_topic="gateway.stock.commands",
         reply_topic="gateway.stock.replies",
@@ -181,7 +195,7 @@ def stock_find(item_id: str):
 @app.post("/stock/add/<item_id>/<amount>")
 @app.post("/add_stock/<item_id>/<amount>")
 def stock_add(item_id: str, amount: int):
-    partition = _partition_from_hash(item_id)
+    partition = _partition_from_item_id(item_id)
     status, body = _send_command(
         command_topic="gateway.stock.commands",
         reply_topic="gateway.stock.replies",
@@ -196,7 +210,7 @@ def stock_add(item_id: str, amount: int):
 @app.post("/stock/subtract/<item_id>/<amount>")
 @app.post("/subtract_stock/<item_id>/<amount>")
 def stock_subtract(item_id: str, amount: int):
-    partition = _partition_from_hash(item_id)
+    partition = _partition_from_item_id(item_id)
     status, body = _send_command(
         command_topic="gateway.stock.commands",
         reply_topic="gateway.stock.replies",
@@ -226,7 +240,7 @@ def payment_create_user():
 @app.get("/payment/find_user/<user_id>")
 @app.get("/find_user/<user_id>")
 def payment_find_user(user_id: str):
-    partition = _partition_from_hash(user_id)
+    partition = _partition_from_user_id(user_id)
     status, body = _send_command(
         command_topic="gateway.payment.commands",
         reply_topic="gateway.payment.replies",
@@ -241,7 +255,7 @@ def payment_find_user(user_id: str):
 @app.post("/payment/add_funds/<user_id>/<amount>")
 @app.post("/add_funds/<user_id>/<amount>")
 def payment_add_funds(user_id: str, amount: int):
-    partition = _partition_from_hash(user_id)
+    partition = _partition_from_user_id(user_id)
     status, body = _send_command(
         command_topic="gateway.payment.commands",
         reply_topic="gateway.payment.replies",
@@ -256,7 +270,7 @@ def payment_add_funds(user_id: str, amount: int):
 @app.post("/payment/pay/<user_id>/<amount>")
 @app.post("/pay/<user_id>/<amount>")
 def payment_pay(user_id: str, amount: int):
-    partition = _partition_from_hash(user_id)
+    partition = _partition_from_user_id(user_id)
     status, body = _send_command(
         command_topic="gateway.payment.commands",
         reply_topic="gateway.payment.replies",
