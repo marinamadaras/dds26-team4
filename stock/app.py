@@ -255,7 +255,7 @@ def start_consumer():
 
 @app.post('/item/create/<price>')
 def create_item(price: int):
-    key = str(uuid.uuid4())
+    key = f"s{KAFKA_CONSUMER_PARTITION}_{uuid.uuid4()}"
     app.logger.debug(f"Item: {key} created")
     value = msgpack.encode(StockValue(stock=0, price=int(price)))
     try:
