@@ -203,7 +203,7 @@ def start_consumer():
 
 @app.post('/create_user')
 def create_user():
-    key = str(uuid.uuid4())
+    key = f"s{KAFKA_CONSUMER_PARTITION}_{uuid.uuid4()}"
     value = msgpack.encode(UserValue(credit=0))
     try:
         db.set(key, value)
