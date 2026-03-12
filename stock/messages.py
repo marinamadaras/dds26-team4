@@ -55,6 +55,33 @@ class RollbackStockReply(BaseMessage):
     type: str = "RollbackStockReply"
 
 
+class PrepareStockRequest(BaseMessage):
+    tx_id: str
+    items: list[tuple[str, int]]
+    type: str = "PrepareStockRequest"
+
+
+class PrepareStockReply(BaseMessage):
+    tx_id: str
+    success: bool
+    error: str | None = None
+    type: str = "PrepareStockReply"
+
+
+class StockDecisionRequest(BaseMessage):
+    tx_id: str
+    decision: str
+    type: str = "StockDecisionRequest"
+
+
+class StockDecisionReply(BaseMessage):
+    tx_id: str
+    decision: str
+    success: bool
+    error: str | None = None
+    type: str = "StockDecisionReply"
+
+
 MESSAGE_TYPES: dict[str, type[BaseMessage]] = {
     "FindStock": FindStock,
     "FindStockReply": FindStockReply,
@@ -62,4 +89,8 @@ MESSAGE_TYPES: dict[str, type[BaseMessage]] = {
     "StockSubtractedReply": StockSubtractedReply,
     "RollbackStockRequest": RollbackStockRequest,
     "RollbackStockReply": RollbackStockReply,
+    "PrepareStockRequest": PrepareStockRequest,
+    "PrepareStockReply": PrepareStockReply,
+    "StockDecisionRequest": StockDecisionRequest,
+    "StockDecisionReply": StockDecisionReply,
 }
