@@ -142,6 +142,20 @@ def mark_reply_received(idempotency_key: str):
 
 # RETRY
 
+def publish_missing_messages(
+    order_id: str,
+    order: OrderValue,
+    action: str,  # "subtract_stock" or "rollback_stock"
+    topic_fn,     # publish_subtract_stock or publish_rollback_stock
+) -> None:
+    items_quantities: dict[str, int] = defaultdict(int)
+    for item_id, quantity in order.items:
+        items_quantities[item_id] += quantity
+    for item_id, quantity in items_quantities.items():
+        idem_key = make_idempotency_key(order_id, action, item_id, quantity)
+        if not db.get(f"_outgoing:{idem_key}"):
+            topic_fn(order_id, item_id, quantity)
+
 def _resend_outgoing_record(record: OutgoingMessageRecord) -> None:
     type_map = {
         "subtract_stock": ("subtract.stock", SubtractStock),
@@ -228,15 +242,7 @@ def recover_stuck_orders() -> None:
 
             if "cancelled" in event_set: # it might be cancelled but we are not sure
                 if "rollback_stock_started" in event_set and "rollback_stock_finished" not in event_set:
-                    # crashed after logging rollback_stock_started but before sending message
-                    # find which items have no outgoing rollback record
-                    items_quantities: dict[str, int] = defaultdict(int)
-                    for item_id, quantity in order.items:
-                        items_quantities[item_id] += quantity
-                    for item_id, quantity in items_quantities.items():
-                        idem_key = make_idempotency_key(order_id, "rollback_stock", item_id, quantity)
-                        if not db.get(f"_outgoing:{idem_key}"): # if it is already in outgoing state this is handled in other recovery message
-                            publish_rollback_stock(order_id, item_id, quantity)
+                    publish_missing_messages(order_id, order, "rollback_stock", publish_rollback_stock)
 
                 if "rollback_payment_started" in event_set and "rollback_payment_finished" not in event_set:
                     # crashed after logging rollback_payment_started but before sending message
@@ -252,7 +258,7 @@ def recover_stuck_orders() -> None:
                 and "payment_failed" not in event_set and "paid" not in event_set
 
             if stock_pending or payment_pending:
-                recover_stock_and_payment(
+                retry_stock_and_payment(
                     order,
                     order_id,
                     recover_stock=stock_pending,
@@ -262,13 +268,7 @@ def recover_stuck_orders() -> None:
             if "rollback_stock_started" in event_set and "rollback_stock_finished" not in event_set:
                 # crashed after logging rollback_stock_started but before sending message
                 # find which items have no outgoing rollback record
-                items_quantities: dict[str, int] = defaultdict(int)
-                for item_id, quantity in order.items:
-                    items_quantities[item_id] += quantity
-                for item_id, quantity in items_quantities.items():
-                    idem_key = make_idempotency_key(order_id, "rollback_stock", item_id, quantity)
-                    if not db.get(f"_outgoing:{idem_key}"):
-                        publish_rollback_stock(order_id, item_id, quantity)
+                publish_missing_messages(order_id, order, "rollback_stock", publish_rollback_stock)
 
             if "rollback_payment_started" in event_set and "rollback_payment_finished" not in event_set:
                 # crashed after logging rollback_payment_started but before sending message
@@ -292,12 +292,7 @@ def retry_stock_and_payment(
     order.expected_items = len(items_quantities)
     db.set(order_id, msgpack.encode(order))
     if recover_stock:
-        for item_id, quantity in items_quantities.items():
-            idem_key = make_idempotency_key(order_id, "subtract_stock", item_id, quantity)
-            # Resend only missing stock messages so duplicates stay bounded by
-            # the outgoing-message log.
-            if not db.get(f"_outgoing:{idem_key}"):
-                publish_subtract_stock(order_id, item_id, quantity)
+        publish_missing_messages(order_id, order, "subtract_stock", publish_subtract_stock)
 
     if recover_payment:
         idem_key = make_idempotency_key(order_id, "payment_request", order.user_id, order.total_cost)
