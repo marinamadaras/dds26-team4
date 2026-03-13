@@ -2,6 +2,7 @@ import logging
 import os
 import atexit
 import threading
+import re
 import uuid
 import urllib.error
 import urllib.request
@@ -37,6 +38,13 @@ db: redis.Redis = redis.Redis(host=os.environ['REDIS_HOST'],
 MAX_RETRIES    = 5
 
 _consumer_retry_counts: dict[str, int] = {}
+
+
+def _partition_from_order_id(order_id: str) -> int:
+    match = re.match(r"^s(\d+)_", order_id)
+    if match:
+        return int(match.group(1))
+    return KAFKA_CONSUMER_PARTITION
 
 
 def close_db_connection():
@@ -113,7 +121,12 @@ def handle_payment_request(message: PaymentRequest):
             success=cached.success,
             error=cached.error,
         )
-        publish(topic="payment.replies", key=message.order_id, value=reply)
+        publish(
+            topic="payment.replies",
+            key=message.order_id,
+            value=reply,
+            partition=_partition_from_order_id(message.order_id),
+        )
         return
 
     try:
@@ -142,7 +155,12 @@ def handle_payment_request(message: PaymentRequest):
             success=False,
             error=str(e),
         )
-    publish(topic="payment.replies", key=message.order_id, value=reply)
+    publish(
+        topic="payment.replies",
+        key=message.order_id,
+        value=reply,
+        partition=_partition_from_order_id(message.order_id),
+    )
 
 
 def handle_message(message: BaseMessage):
@@ -206,7 +224,12 @@ def handle_rollback_payment_request(message: RollbackPaymentRequest):
             success=True,
             error=None,
         )
-        publish(topic="rollback.payment.replies", key=message.order_id, value=reply)
+        publish(
+            topic="rollback.payment.replies",
+            key=message.order_id,
+            value=reply,
+            partition=_partition_from_order_id(message.order_id),
+        )
         return
 
     # Check if the original payment actually succeeded
@@ -228,7 +251,12 @@ def handle_rollback_payment_request(message: RollbackPaymentRequest):
             amount=message.amount,
             success=True,  # nothing to roll back, not an error
         )
-        publish(topic="rollback.payment.replies", key=message.order_id, value=reply)
+        publish(
+            topic="rollback.payment.replies",
+            key=message.order_id,
+            value=reply,
+            partition=_partition_from_order_id(message.order_id),
+        )
         return
 
     # Payment was successfully taken — refund it
@@ -250,7 +278,12 @@ def handle_rollback_payment_request(message: RollbackPaymentRequest):
         amount=message.amount,
         success=True,
     )
-    publish(topic="rollback.payment.replies", key=message.order_id, value=reply)
+    publish(
+        topic="rollback.payment.replies",
+        key=message.order_id,
+        value=reply,
+        partition=_partition_from_order_id(message.order_id),
+    )
 
 
 def consumer_loop():
@@ -316,7 +349,7 @@ def start_consumer():
 
 @app.post('/create_user')
 def create_user():
-    key = f"s{KAFKA_CONSUMER_PARTITION}_{uuid.uuid4()}"
+    key = f"p{KAFKA_CONSUMER_PARTITION}_{uuid.uuid4()}"
     value = msgpack.encode(UserValue(credit=0))
     try:
         db.set(key, value)

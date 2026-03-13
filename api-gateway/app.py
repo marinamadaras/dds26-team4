@@ -5,7 +5,7 @@ import zlib
 import time
 
 import msgspec
-from confluent_kafka import Consumer, Producer, TopicPartition, OFFSET_BEGINNING
+from confluent_kafka import Consumer, Producer, TopicPartition, OFFSET_END
 from flask import Flask, jsonify, Response, request
 
 BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:29092")
@@ -64,7 +64,7 @@ def _send_command(
             "enable.auto.commit": False,
         }
     )
-    consumer.assign([TopicPartition(reply_topic, partition, OFFSET_BEGINNING)])
+    consumer.assign([TopicPartition(reply_topic, partition, OFFSET_END)])
     # Ensure reply consumer is attached before publishing command.
     consumer.poll(0)
 

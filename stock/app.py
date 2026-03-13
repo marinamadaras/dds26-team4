@@ -2,6 +2,7 @@ import logging
 import os
 import atexit
 import threading
+import re
 import uuid
 import urllib.error
 import urllib.request
@@ -38,6 +39,13 @@ db: redis.Redis = redis.Redis(host=os.environ['REDIS_HOST'],
 
 MAX_RETRIES = 5
 _consumer_retry_counts: dict[str, int] = {}
+
+
+def _partition_from_order_id(order_id: str) -> int:
+    match = re.match(r"^s(\d+)_", order_id)
+    if match:
+        return int(match.group(1))
+    return KAFKA_CONSUMER_PARTITION
 
 def close_db_connection():
     db.close()
@@ -141,6 +149,7 @@ def handle_find_stock(message: FindStock, order_id: str):
         topic="find.stock.replies",
         key=order_id,
         value=reply,
+        partition=_partition_from_order_id(order_id),
     )
     app.logger.info("published find.stock.replies order_id=%s item_id=%s found=%s", order_id, message.item_id, reply.found)
 
@@ -207,7 +216,12 @@ def handle_subtract_stock(message: SubtractStock):
             success=cached.success,
             error=cached.error,
         )
-        publish(topic="subtract.stock.replies", key=message.order_id, value=reply)
+        publish(
+            topic="subtract.stock.replies",
+            key=message.order_id,
+            value=reply,
+            partition=_partition_from_order_id(message.order_id),
+        )
         return
 
     try:
@@ -240,6 +254,7 @@ def handle_subtract_stock(message: SubtractStock):
         topic="subtract.stock.replies",
         key=message.order_id,
         value=reply,
+        partition=_partition_from_order_id(message.order_id),
     )
 
 def handle_rollback_stock(message: RollbackStockRequest):
@@ -254,7 +269,12 @@ def handle_rollback_stock(message: RollbackStockRequest):
             success=True,
             error=None,
         )
-        publish(topic="rollback.stock.replies", key=message.order_id, value=reply)
+        publish(
+            topic="rollback.stock.replies",
+            key=message.order_id,
+            value=reply,
+            partition=_partition_from_order_id(message.order_id),
+        )
         return
 
     # Check if the original subtraction actually succeeded
@@ -276,7 +296,12 @@ def handle_rollback_stock(message: RollbackStockRequest):
             quantity=message.quantity,
             success=True,
         )
-        publish(topic="rollback.stock.replies", key=message.order_id, value=reply)
+        publish(
+            topic="rollback.stock.replies",
+            key=message.order_id,
+            value=reply,
+            partition=_partition_from_order_id(message.order_id),
+        )
         return
 
     # Stock was successfully subtracted — restore it
@@ -298,7 +323,12 @@ def handle_rollback_stock(message: RollbackStockRequest):
         success=True,
     )
 
-    publish(topic="rollback.stock.replies", key=message.order_id, value=reply)
+    publish(
+        topic="rollback.stock.replies",
+        key=message.order_id,
+        value=reply,
+        partition=_partition_from_order_id(message.order_id),
+    )
 
 def consumer_loop():
     app.logger.info(
@@ -365,7 +395,7 @@ def start_consumer():
 
 @app.post('/item/create/<price>')
 def create_item(price: int):
-    key = f"s{KAFKA_CONSUMER_PARTITION}_{uuid.uuid4()}"
+    key = f"t{KAFKA_CONSUMER_PARTITION}_{uuid.uuid4()}"
     app.logger.debug(f"Item: {key} created")
     value = msgpack.encode(StockValue(stock=0, price=int(price)))
     try:

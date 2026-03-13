@@ -2,6 +2,7 @@ import logging
 import os
 import atexit
 import random
+import re
 import uuid
 import threading
 from collections import defaultdict
@@ -52,6 +53,13 @@ RETRY_TIMEOUT  = 30
 RETRY_INTERVAL = 10   # how often the checker wakes up
 
 _consumer_retry_counts: dict[str, int] = {}
+
+
+def _partition_from_order_id(order_id: str) -> int:
+    match = re.match(r"^s(\d+)_", order_id)
+    if match:
+        return int(match.group(1))
+    return KAFKA_CONSUMER_PARTITION
 
 def close_db_connection():
     db.close()
@@ -171,7 +179,12 @@ def _resend_outgoing_record(record: OutgoingMessageRecord) -> None:
     topic, message_cls = entry
     message = msgpack.decode(record.payload, type=message_cls)
 
-    publish(topic=topic, key=record.order_id, value=message)
+    publish(
+        topic=topic,
+        key=record.order_id,
+        value=message,
+        partition=_partition_from_order_id(record.order_id),
+    )
 
 # for when you have sent  a message but did not receive and answer
 def check_and_retry_pending_messages() -> None:
@@ -381,6 +394,7 @@ def publish_find_stock(order_id: str, item_id: str, quantity: int):
         topic="find.stock",
         key=order_id,
         value=message,
+        partition=_partition_from_order_id(order_id),
     )
 
 
@@ -400,6 +414,7 @@ def publish_subtract_stock(order_id: str, item_id: str, quantity: int):
         topic="subtract.stock",
         key=message.order_id,
         value=message,
+        partition=_partition_from_order_id(message.order_id),
     )
 
 
@@ -412,7 +427,12 @@ def publish_payment(order_id: str, user_id: str, amount: int):
         amount=int(amount),
     )
     log_outgoing_message(idem_key, "payment", order_id, message)
-    publish(topic="payment", key=order_id, value=message)
+    publish(
+        topic="payment",
+        key=order_id,
+        value=message,
+        partition=_partition_from_order_id(order_id),
+    )
 
 
 
@@ -425,7 +445,12 @@ def publish_rollback_stock(order_id: str, item_id: str, quantity: int):
         quantity=int(quantity),
     )
     log_outgoing_message(idem_key, "rollback_stock", order_id, message)
-    publish(topic="rollback.stock", key=order_id, value=message)
+    publish(
+        topic="rollback.stock",
+        key=order_id,
+        value=message,
+        partition=_partition_from_order_id(order_id),
+    )
 
 
 def publish_rollback_payment(order_id: str, user_id: str, amount: int):
@@ -437,7 +462,12 @@ def publish_rollback_payment(order_id: str, user_id: str, amount: int):
         amount=int(amount),
     )
     log_outgoing_message(idem_key, "rollback_payment", order_id, message)
-    publish(topic="rollback.payment", key=order_id, value=message)
+    publish(
+        topic="rollback.payment",
+        key=order_id,
+        value=message,
+        partition=_partition_from_order_id(order_id),
+    )
 
 
 def maybe_commit_checkout(order_id: str, order: OrderValue) -> None:
@@ -922,4 +952,3 @@ else:
         gunicorn_logger = logging.getLogger('gunicorn.error')
         app.logger.handlers = gunicorn_logger.handlers
         app.logger.setLevel(gunicorn_logger.level)
-
