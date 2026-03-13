@@ -11,6 +11,7 @@ class FindStockReply(BaseMessage):
     item_id: str
     found: bool
     quantity: int
+    idempotency_key: str
     stock: int | None = None
     price: int | None = None
     type: str = "FindStockReply"
@@ -20,6 +21,7 @@ class FindStockReply(BaseMessage):
 class FindStock(BaseMessage):
     item_id: str
     quantity: int
+    idempotency_key: str
     type: str = "FindStock"
 
 
@@ -27,6 +29,7 @@ class SubtractStock(BaseMessage):
     order_id: str
     item_id: str
     quantity: int
+    idempotency_key: str
     type: str = "SubtractStock"
 
 
@@ -35,6 +38,7 @@ class StockSubtractedReply(BaseMessage):
     item_id: str
     quantity: int
     success: bool
+    idempotency_key: str
     error: str | None = None
     type: str = "StockSubtractedReply"
 
@@ -43,6 +47,7 @@ class RollbackStockRequest(BaseMessage):
     order_id: str
     item_id: str
     quantity: int
+    idempotency_key: str
     type: str = "RollbackStockRequest"
 
 
@@ -51,6 +56,7 @@ class RollbackStockReply(BaseMessage):
     item_id: str
     quantity: int
     success: bool
+    idempotency_key: str
     error: str | None = None
     type: str = "RollbackStockReply"
 
