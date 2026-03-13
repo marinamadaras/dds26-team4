@@ -121,6 +121,7 @@ def handle_find_stock(message: FindStock, order_id: str):
             order_id=order_id,
             item_id=message.item_id,
             quantity=message.quantity,
+            idempotency_key=message.idempotency_key,
             found=False,
         )
     else:
@@ -128,6 +129,7 @@ def handle_find_stock(message: FindStock, order_id: str):
             order_id=order_id,
             item_id=message.item_id,
             quantity=message.quantity,
+            idempotency_key=message.idempotency_key,
             found=True,
             stock=item_entry.stock,
             price=item_entry.price,

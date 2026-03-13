@@ -9,7 +9,7 @@ class PaymentRequest(BaseMessage):
     order_id: str
     user_id: str
     amount: int
-    idempotency_key: str
+    idempotency_key: str = ""
     type: str = "PaymentRequest"
 
 
@@ -18,7 +18,7 @@ class PaymentReply(BaseMessage):
     user_id: str
     amount: int
     success: bool
-    idempotency_key: str
+    idempotency_key: str = ""
     error: str | None = None
     type: str = "PaymentReply"
 
@@ -27,7 +27,7 @@ class RollbackPaymentRequest(BaseMessage):
     order_id: str
     user_id: str
     amount: int
-    idempotency_key: str
+    idempotency_key: str = ""
     type: str = "RollbackPaymentRequest"
 
 
@@ -36,7 +36,7 @@ class RollbackPaymentReply(BaseMessage):
     user_id: str
     amount: int
     success: bool
-    idempotency_key: str
+    idempotency_key: str = ""
     error: str | None = None
     type: str = "RollbackPaymentReply"
 
