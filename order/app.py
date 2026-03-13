@@ -60,7 +60,7 @@ def close_db_connection():
 class ReplyProcessingRecord(Struct):
     success: bool
 
-#TODO: for PARAlLEL update this to track payment and stock -> why
+
 class OrderValue(Struct):
     items: list[tuple[str, int]]
     user_id: str
@@ -73,6 +73,15 @@ class OrderValue(Struct):
     payment_reply_received: bool = False
     payment_success: bool = False
     checkout_finalized: bool = False
+
+class OutgoingMessageRecord(Struct):
+    idempotency_key: str
+    message_type: str
+    sent_at: float
+    reply_received: bool
+    retry_count: int
+    order_id: str
+    payload: bytes  # serialized message for retry
 
 def get_reply_processing_record(idempotency_key: str) -> ReplyProcessingRecord | None:
     if not idempotency_key:
@@ -105,15 +114,6 @@ def make_idempotency_key(order_id: str, action: str, item_id: str = "", quantity
     return f"order:{order_id}:{action}:{item_id}:{int(quantity)}"
 
 
-class OutgoingMessageRecord(Struct):
-    idempotency_key: str
-    message_type: str
-    sent_at: float
-    reply_received: bool
-    retry_count: int
-    order_id: str
-    payload: bytes  # serialized message for retry
-
 def log_outgoing_message(idempotency_key: str, message_type: str, order_id: str, message: BaseMessage):
     """Log before sending any message"""
     record = OutgoingMessageRecord(
@@ -128,7 +128,6 @@ def log_outgoing_message(idempotency_key: str, message_type: str, order_id: str,
     key = f"_outgoing:{idempotency_key}"
     db.set(key, msgpack.encode(record))
     db.zadd("_outgoing_pending", {idempotency_key: time.time()})
-    app.logger.info(f"Logged outgoing message: {idempotency_key}")
 
 def mark_reply_received(idempotency_key: str):
     """Mark that we received a reply for this message"""
@@ -139,7 +138,6 @@ def mark_reply_received(idempotency_key: str):
         record.reply_received = True
         db.set(key, msgpack.encode(record))
         db.zrem("_outgoing_pending", idempotency_key)
-        app.logger.info(f"Marked reply received: {idempotency_key}")
 
 
 # RETRY
@@ -154,28 +152,21 @@ def _resend_outgoing_record(record: OutgoingMessageRecord) -> None:
 
     entry = type_map.get(record.message_type)
     if not entry:
-        app.logger.error("Unknown message_type in outgoing record: %s", record.message_type)
         return
 
     topic, message_cls = entry
     message = msgpack.decode(record.payload, type=message_cls)
 
     publish(topic=topic, key=record.order_id, value=message)
-    app.logger.info(
-        "retried %s idem_key=%s attempt=%d",
-        record.message_type, record.idempotency_key, record.retry_count
-    )
 
 # for when you have sent  a message but did not receive and answer
 def check_and_retry_pending_messages() -> None:
     now = time.time()
     cutoff = now - RETRY_TIMEOUT
 
-
     try:
         timed_out_keys = db.zrangebyscore("_outgoing_pending", 0, cutoff)
     except redis.exceptions.RedisError as e:
-        app.logger.error("Redis error reading _outgoing_pending: %s", e)
         return
 
     for idem_key in timed_out_keys:
@@ -195,17 +186,8 @@ def check_and_retry_pending_messages() -> None:
                 order = get_order_from_db(record.order_id)
                 latest = get_latest_log_event(record.order_id)
                 if latest not in ("cancelled", "saga_end"):
-                    app.logger.error(
-                        "Max retries exceeded idem_key=%s — compensating order=%s",
-                        record.idempotency_key, record.order_id
-                    )
                     compensate_order(order, record.order_id)
-                else:
-                    app.logger.critical(
-                        "MANUAL INTERVENTION REQUIRED — rollback failed after max retries "
-                        "idem_key=%s order=%s message_type=%s",
-                        record.idempotency_key, record.order_id, record.message_type
-                    )
+
                 db.zrem("_outgoing_pending", idem_key_str)
                 continue
 
@@ -216,19 +198,17 @@ def check_and_retry_pending_messages() -> None:
             _resend_outgoing_record(record)
 
         except Exception as e:
-            app.logger.exception("Error retrying idem_key=%s: %s", idem_key_str, e)
+            pass
 
 
 
 # Used to check if an order is stuck between states.
 def recover_stuck_orders() -> None:
-    app.logger.info("Scanning for stuck orders...")
 
     # get orders that are started but not finished
     try:
         pending_order_ids = db.zrange("_pending_orders", 0, -1)
     except redis.exceptions.RedisError as e:
-        app.logger.error("Redis error reading _pending_orders: %s", e)
         return
 
     for order_id_bytes in pending_order_ids:
@@ -256,20 +236,12 @@ def recover_stuck_orders() -> None:
                     for item_id, quantity in items_quantities.items():
                         idem_key = make_idempotency_key(order_id, "rollback_stock", item_id, quantity)
                         if not db.get(f"_outgoing:{idem_key}"): # if it is already in outgoing state this is handled in other recovery message
-                            app.logger.warning(
-                                "Resuming order=%s missing rollback_stock item=%s",
-                                order_id, item_id
-                            )
                             publish_rollback_stock(order_id, item_id, quantity)
 
                 if "rollback_payment_started" in event_set and "rollback_payment_finished" not in event_set:
                     # crashed after logging rollback_payment_started but before sending message
                     idem_key = make_idempotency_key(order_id, "rollback_payment", order.user_id, order.total_cost)
                     if not db.get(f"_outgoing:{idem_key}"):
-                        app.logger.warning(
-                            "Resuming order=%s missing rollback_payment — no outgoing record",
-                            order_id
-                        )
                         publish_rollback_payment(order_id, order.user_id, order.total_cost)
 
                 maybe_finish_cancelled_order(order_id, order)
@@ -296,27 +268,19 @@ def recover_stuck_orders() -> None:
                 for item_id, quantity in items_quantities.items():
                     idem_key = make_idempotency_key(order_id, "rollback_stock", item_id, quantity)
                     if not db.get(f"_outgoing:{idem_key}"):
-                        app.logger.warning(
-                            "Resuming order=%s missing rollback_stock item=%s",
-                            order_id, item_id
-                        )
                         publish_rollback_stock(order_id, item_id, quantity)
 
             if "rollback_payment_started" in event_set and "rollback_payment_finished" not in event_set:
                 # crashed after logging rollback_payment_started but before sending message
                 idem_key = make_idempotency_key(order_id, "rollback_payment", order.user_id, order.total_cost)
                 if not db.get(f"_outgoing:{idem_key}"):
-                    app.logger.warning(
-                        "Resuming order=%s missing rollback_payment — no outgoing record",
-                        order_id
-                    )
                     publish_rollback_payment(order_id, order.user_id, order.total_cost)
 
         except Exception as e:
-            app.logger.exception("Error recovering order=%s: %s", order_id, e)
+            pass
 
 
-def recover_stock_and_payment(
+def retry_stock_and_payment(
     order: OrderValue,
     order_id: str,
     recover_stock: bool = True,
@@ -333,15 +297,11 @@ def recover_stock_and_payment(
             # Resend only missing stock messages so duplicates stay bounded by
             # the outgoing-message log.
             if not db.get(f"_outgoing:{idem_key}"):
-                app.logger.warning(
-                    "Resuming order=%s missing subtract_stock item=%s", order_id, item_id
-                )
                 publish_subtract_stock(order_id, item_id, quantity)
 
     if recover_payment:
         idem_key = make_idempotency_key(order_id, "payment_request", order.user_id, order.total_cost)
         if not db.get(f"_outgoing:{idem_key}"):
-            app.logger.warning("Resuming order=%s missing payment request", order_id)
             publish_payment(order_id, order.user_id, order.total_cost)
 
 
@@ -383,13 +343,12 @@ def recover_on_startup() -> None:
     anything that never got a reply. This handles the case where the service
     crashed mid-saga and needs to resume or compensate.
     """
-    app.logger.info("Running startup recovery scan…")
     try:
         check_and_retry_pending_messages()
         recover_stuck_orders()
     except Exception as e:
-        app.logger.error("Startup recovery error: %s", e)
-    app.logger.info("Startup recovery scan complete.")
+        pass
+
 
 
 def start_retry_checker() -> None:
@@ -399,14 +358,12 @@ def start_retry_checker() -> None:
             try:
                 check_and_retry_pending_messages()
             except Exception as e:
-                app.logger.error("Retry checker error: %s", e)
+                pass
             time.sleep(RETRY_INTERVAL)
 
     thread = threading.Thread(target=retry_loop, daemon=True)
     thread.start()
-    app.logger.info(
-        "Retry checker started (interval=%ds, timeout=%ds)", RETRY_INTERVAL, RETRY_TIMEOUT
-    )
+
 
 def start_consumer():
     global _consumer_thread
@@ -415,7 +372,6 @@ def start_consumer():
     thread = threading.Thread(target=consumer_loop, daemon=True)
     thread.start()
     _consumer_thread = thread
-    app.logger.info("order consumer thread started")
 
 atexit.register(close_db_connection)
 
@@ -451,9 +407,6 @@ def publish_subtract_stock(order_id: str, item_id: str, quantity: int):
         value=message,
     )
 
-    app.logger.info(f"Sent subtract_stock: {idempotency_key}")
-
-
 
 def publish_payment(order_id: str, user_id: str, amount: int):
     idem_key = make_idempotency_key(order_id, "payment_request", user_id, amount)
@@ -465,7 +418,6 @@ def publish_payment(order_id: str, user_id: str, amount: int):
     )
     log_outgoing_message(idem_key, "payment", order_id, message)
     publish(topic="payment", key=order_id, value=message)
-    app.logger.info("sent payment idem_key=%s", idem_key)
 
 
 
@@ -479,7 +431,6 @@ def publish_rollback_stock(order_id: str, item_id: str, quantity: int):
     )
     log_outgoing_message(idem_key, "rollback_stock", order_id, message)
     publish(topic="rollback.stock", key=order_id, value=message)
-    app.logger.info("sent rollback_stock idem_key=%s", idem_key)
 
 
 def publish_rollback_payment(order_id: str, user_id: str, amount: int):
@@ -492,7 +443,6 @@ def publish_rollback_payment(order_id: str, user_id: str, amount: int):
     )
     log_outgoing_message(idem_key, "rollback_payment", order_id, message)
     publish(topic="rollback.payment", key=order_id, value=message)
-    app.logger.info("sent rollback_payment idem_key=%s", idem_key)
 
 
 def maybe_commit_checkout(order_id: str, order: OrderValue) -> None:
@@ -520,7 +470,6 @@ def maybe_commit_checkout(order_id: str, order: OrderValue) -> None:
     append_log(order_id, {"event": "saga_end"})
     db.set(order_id, msgpack.encode(order))
     mark_order_done(order_id)
-    app.logger.info("Order completed: %s", order_id)
 
 
 def handle_find_stock_reply(message: FindStockReply):
@@ -531,9 +480,6 @@ def handle_find_stock_reply(message: FindStockReply):
         return
     if not message.found:
         store_reply_processing_record(message.idempotency_key, False)
-        app.logger.warning(
-            f"Stock not found for item {message.item_id} in order {message.order_id}"
-        )
         return  # nothing to update
 
 
@@ -549,10 +495,6 @@ def handle_find_stock_reply(message: FindStockReply):
 
     db.set(message.order_id, msgpack.encode(order_entry))
     store_reply_processing_record(message.idempotency_key, True)
-
-    app.logger.info(
-        f"Order {message.order_id} updated asynchronously"
-    )
 
 
 def handle_stock_subtracted_reply(message: StockSubtractedReply):
@@ -574,7 +516,6 @@ def handle_stock_subtracted_reply(message: StockSubtractedReply):
         return
 
     if not message.success:
-        app.logger.warning("Stock subtraction failed for order %s — cancelling", order_id)
         compensate_order(order, order_id)
         store_reply_processing_record(message.idempotency_key, False)
         return
@@ -623,7 +564,6 @@ def handle_payment_reply(message: PaymentReply):
         order.payment_success = False
         append_log(order_id, {"event": "payment_failed"})
         db.set(order_id, msgpack.encode(order))
-        app.logger.info("Payment failed for order %s — rolling back stock", order_id)
         compensate_order(order, order_id)
         store_reply_processing_record(message.idempotency_key, False)
 
@@ -659,8 +599,6 @@ def handle_rollback_payment_reply(message: RollbackPaymentReply):
     store_reply_processing_record(message.idempotency_key, message.success)
     order = get_order_from_db(message.order_id)
     maybe_finish_cancelled_order(message.order_id, order)
-    app.logger.info("rollback_payment_finished order=%s success=%s",
-                    message.order_id, message.success)
 
 def handle_message(message: BaseMessage):
     if isinstance(message, FindStockReply):
@@ -678,7 +616,6 @@ def handle_message(message: BaseMessage):
     if isinstance(message, RollbackPaymentReply):
         handle_rollback_payment_reply(message)
         return
-    app.logger.warning(f"No handler registered for message type: {message.type}")
 
 
 def handle_http_command(command: dict):
@@ -718,11 +655,6 @@ def handle_http_command(command: dict):
 
 
 def consumer_loop():
-    app.logger.info(
-        "order consumer loop starting partition=%s instance_id=%s",
-        KAFKA_CONSUMER_PARTITION,
-        KAFKA_CONSUMER_INSTANCE_ID,
-    )
     consumer = create_consumer(
         group_id="order-service",
         topics=[
@@ -746,12 +678,9 @@ def consumer_loop():
             continue
 
         if msg.error():
-            error_str = str(msg.error())
-            if "NOT_COORDINATOR" in error_str:
-                app.logger.warning("Kafka coordinator not ready yet: %s", msg.error())
-            else:
-                app.logger.error("Kafka error: %s", msg.error())
             continue
+
+        key = msg.key().decode() if msg.key() else ""
 
         try:
             if msg.topic() == "gateway.order.commands":
@@ -761,8 +690,6 @@ def consumer_loop():
                 continue
 
             message = decode_message(msg.value())
-            key = msg.key().decode() if msg.key() else ""
-            app.logger.info("consumed topic=%s key=%s type=%s", msg.topic(), key, message.type)
             handle_message(message)
             consumer.commit(message=msg)
             _consumer_retry_counts.pop(key, None)
@@ -771,11 +698,7 @@ def consumer_loop():
 
             _consumer_retry_counts[key] = _consumer_retry_counts.get(key, 0) + 1
             attempt = _consumer_retry_counts[key]
-            app.logger.exception(
-                "Processing error (attempt %d/%d) key=%s: %s", attempt, MAX_RETRIES, key, e
-            )
             if attempt >= MAX_RETRIES:
-                app.logger.error("Max consumer retries reached for key=%s — skipping", key)
                 consumer.commit(message=msg)
                 _consumer_retry_counts.pop(key, None)
             else:
@@ -788,7 +711,6 @@ def compensate_order(order: OrderValue, order_id: str) -> None:
     events = set(get_log_events(order_id))
 
     if order.checkout_finalized or "cancelled" in events or "saga_end" in events:
-        app.logger.warning("compensate_order called on already finished order=%s", order_id)
         return
 
     items_quantities: dict[str, int] = defaultdict(int)
@@ -918,12 +840,7 @@ def add_item(order_id: str, item_id: str, quantity: int):
     order_entry: OrderValue = get_order_from_db(order_id)
     item_reply = send_get_request(f"{GATEWAY_URL}/stock/find/{item_id}")
     if item_reply.status_code != 200:
-        # Request failed because item does not exist
         abort(400, f"Item: {item_id} does not exist!")
-
-    # Cannot modify order once checkout starts
-    if order_entry.status != ORDER_CREATED:
-        abort(400, f"Order cannot be modified in state: {order_entry.status}")
 
     item_json: dict = item_reply.json()
     order_entry.items.append((item_id, int(quantity)))
@@ -966,8 +883,6 @@ def mark_order_done(order_id: str):
 @app.post('/checkout/<order_id>')
 def checkout(order_id: str):
     log_saga_start(order_id)
-    app.logger.debug(f"Checking out {order_id}")
-
     order_entry: OrderValue = get_order_from_db(order_id)
 
     # get the quantity per item
@@ -1009,6 +924,7 @@ else:
         recover_on_startup()
         start_consumer()
         start_retry_checker()
-    gunicorn_logger = logging.getLogger('gunicorn.error')
-    app.logger.handlers = gunicorn_logger.handlers
-    app.logger.setLevel(gunicorn_logger.level)
+        gunicorn_logger = logging.getLogger('gunicorn.error')
+        app.logger.handlers = gunicorn_logger.handlers
+        app.logger.setLevel(gunicorn_logger.level)
+
