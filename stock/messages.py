@@ -19,6 +19,7 @@ class FindStockReply(BaseMessage):
 
 # incoming message to Stock service
 class FindStock(BaseMessage):
+    order_id: str
     item_id: str
     quantity: int
     idempotency_key: str = ""

@@ -13,14 +13,18 @@ producer = Producer({"bootstrap.servers": BOOTSTRAP})
 logger = logging.getLogger(__name__)
 
 
-def publish(topic: str, key: str, value: BaseMessage):
+def publish(topic: str, key: str, value: BaseMessage, partition: int | None = None):
+    kwargs = {}
+    if partition is not None:
+        kwargs["partition"] = partition
     producer.produce(
         topic,
         key=key.encode(),
         value=msgspec.json.encode(value),
+        **kwargs,
     )
     producer.flush(2)
-    logger.info("published %s to %s", topic, key)
+    logger.info("published %s to %s partition=%s", topic, key, partition)
 
 
 def publish_raw(topic: str, key: str, payload: dict, partition: int | None = None):

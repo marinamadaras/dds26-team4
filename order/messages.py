@@ -7,6 +7,7 @@ class BaseMessage(msgspec.Struct, kw_only=True):
 
 # outgoing messages from Order service
 class FindStock(BaseMessage):
+    order_id: str
     item_id: str
     quantity: int
     idempotency_key: str = ""

@@ -2,6 +2,7 @@ import logging
 import os
 import atexit
 import threading
+import re
 import uuid
 import urllib.error
 import urllib.request
@@ -43,6 +44,13 @@ def close_db_connection():
 
 
 atexit.register(close_db_connection)
+
+
+def _partition_from_order_id(order_id: str) -> int:
+    match = re.match(r"^s(\d+)_", order_id)
+    if match:
+        return int(match.group(1))
+    return KAFKA_CONSUMER_PARTITION
 
 
 class UserValue(Struct):
@@ -110,7 +118,12 @@ def handle_payment_request(message: PaymentRequest):
             success=False,
             error=str(e),
         )
-    publish(topic="payment.replies", key=message.order_id, value=reply)
+    publish(
+        topic="payment.replies",
+        key=message.order_id,
+        value=reply,
+        partition=_partition_from_order_id(message.order_id),
+    )
 
 
 def handle_message(message: BaseMessage):
@@ -138,13 +151,18 @@ def handle_rollback_payment_request(message: RollbackPaymentRequest):
         success=False,
         error="rollback payment not implemented",
     )
-    publish(topic="rollback.payment.replies", key=message.order_id, value=reply)
+    publish(
+        topic="rollback.payment.replies",
+        key=message.order_id,
+        value=reply,
+        partition=_partition_from_order_id(message.order_id),
+    )
 
 
 def handle_prepare_payment_message(message: PreparePaymentRequest):
     success, error = prepare_payment_tx(message.tx_id, message.user_id, int(message.amount))
     reply = PreparePaymentReply(tx_id=message.tx_id, success=success, error=error)
-    publish(topic="2pc.payment.prepare.replies", key=message.tx_id, value=reply)
+    publish(topic="2pc.payment.prepare.replies", key=message.tx_id, value=reply, partition=KAFKA_CONSUMER_PARTITION)
 
 
 def handle_payment_decision_message(message: PaymentDecisionRequest):
@@ -161,7 +179,7 @@ def handle_payment_decision_message(message: PaymentDecisionRequest):
         success=success,
         error=error,
     )
-    publish(topic="2pc.payment.decision.replies", key=message.tx_id, value=reply)
+    publish(topic="2pc.payment.decision.replies", key=message.tx_id, value=reply, partition=KAFKA_CONSUMER_PARTITION)
 
 
 def consumer_loop():

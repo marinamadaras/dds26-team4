@@ -2,6 +2,7 @@ import logging
 import os
 import atexit
 import random
+import re
 import uuid
 import threading
 from collections import defaultdict
@@ -62,13 +63,33 @@ def start_consumer():
 
 atexit.register(close_db_connection)
 
+
+def _partition_from_prefixed_id(entity_id: str, prefix: str) -> int:
+    match = re.match(rf"^{prefix}(\d+)_", entity_id)
+    if match:
+        return int(match.group(1))
+    return KAFKA_CONSUMER_PARTITION
+
+
+def _partition_from_order_id(order_id: str) -> int:
+    return _partition_from_prefixed_id(order_id, "s")
+
+
+def _partition_from_item_id(item_id: str) -> int:
+    return _partition_from_prefixed_id(item_id, "t")
+
+
+def _partition_from_user_id(user_id: str) -> int:
+    return _partition_from_prefixed_id(user_id, "p")
+
 def publish_find_stock(order_id: str, item_id: str, quantity: int):
-    message = FindStock(item_id=item_id, quantity=int(quantity))
+    message = FindStock(order_id=order_id, item_id=item_id, quantity=int(quantity))
 
     publish(
         topic="find.stock",
-        key=order_id,
+        key=item_id,
         value=message,
+        partition=_partition_from_item_id(item_id),
     )
 
 
@@ -76,8 +97,9 @@ def publish_subtract_stock(order_id: str, item_id: str, quantity: int):
     message = SubtractStock(order_id=order_id, item_id=item_id, quantity=int(quantity))
     publish(
         topic="subtract.stock",
-        key=message.order_id,
+        key=message.item_id,
         value=message,
+        partition=_partition_from_item_id(message.item_id),
     )
 
 
@@ -85,8 +107,9 @@ def publish_payment(order_id: str, user_id: str, amount: int):
     message = PaymentRequest(order_id=order_id, user_id=user_id, amount=int(amount))
     publish(
         topic="payment",
-        key=order_id,
+        key=user_id,
         value=message,
+        partition=_partition_from_user_id(user_id),
     )
 
 
@@ -94,8 +117,9 @@ def publish_rollback_stock(order_id: str, item_id: str, quantity: int):
     message = RollbackStockRequest(order_id=order_id, item_id=item_id, quantity=int(quantity))
     publish(
         topic="rollback.stock",
-        key=order_id,
+        key=item_id,
         value=message,
+        partition=_partition_from_item_id(item_id),
     )
 
 
@@ -103,8 +127,9 @@ def publish_rollback_payment(order_id: str, user_id: str, amount: int):
     message = RollbackPaymentRequest(order_id=order_id, user_id=user_id, amount=int(amount))
     publish(
         topic="rollback.payment",
-        key=order_id,
+        key=user_id,
         value=message,
+        partition=_partition_from_user_id(user_id),
     )
 
 
@@ -114,27 +139,28 @@ def publish_checkout_requested(order_id: str):
         topic="checkout.requested",
         key=order_id,
         value=message,
+        partition=_partition_from_order_id(order_id),
     )
 
 
 def publish_prepare_stock(tx_id: str, items: list[tuple[str, int]]):
     message = PrepareStockRequest(tx_id=tx_id, items=items)
-    publish(topic="2pc.stock.prepare", key=tx_id, value=message)
+    publish(topic="2pc.stock.prepare", key=tx_id, value=message, partition=KAFKA_CONSUMER_PARTITION)
 
 
 def publish_prepare_payment(tx_id: str, user_id: str, amount: int):
     message = PreparePaymentRequest(tx_id=tx_id, user_id=user_id, amount=int(amount))
-    publish(topic="2pc.payment.prepare", key=tx_id, value=message)
+    publish(topic="2pc.payment.prepare", key=tx_id, value=message, partition=KAFKA_CONSUMER_PARTITION)
 
 
 def publish_stock_decision(tx_id: str, decision: str):
     message = StockDecisionRequest(tx_id=tx_id, decision=decision)
-    publish(topic="2pc.stock.decision", key=tx_id, value=message)
+    publish(topic="2pc.stock.decision", key=tx_id, value=message, partition=KAFKA_CONSUMER_PARTITION)
 
 
 def publish_payment_decision(tx_id: str, decision: str):
     message = PaymentDecisionRequest(tx_id=tx_id, decision=decision)
-    publish(topic="2pc.payment.decision", key=tx_id, value=message)
+    publish(topic="2pc.payment.decision", key=tx_id, value=message, partition=KAFKA_CONSUMER_PARTITION)
 
 
 def handle_find_stock_reply(message: FindStockReply):
