@@ -1,8 +1,8 @@
 import os
 import re
+import threading
 import uuid
 import zlib
-import time
 
 import msgspec
 from confluent_kafka import Consumer, Producer, TopicPartition, OFFSET_END
@@ -11,9 +11,20 @@ from flask import Flask, jsonify, Response, request
 BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:29092")
 PARTITIONS = int(os.getenv("KAFKA_PARTITIONS", "3"))
 REQUEST_TIMEOUT_SECONDS = float(os.getenv("KAFKA_REQUEST_TIMEOUT_SECONDS", "10"))
+REPLY_TOPICS = (
+    "gateway.order.replies",
+    "gateway.stock.replies",
+    "gateway.payment.replies",
+)
 
 producer = Producer({"bootstrap.servers": BOOTSTRAP})
 app = Flask("api-gateway")
+_reply_consumer_threads: dict[int, threading.Thread] = {}
+_reply_consumer_ready = {
+    partition: threading.Event() for partition in range(PARTITIONS)
+}
+_pending_lock = threading.Lock()
+_pending_requests: dict[str, dict[str, object]] = {}
 
 # this is more of a helper service for nginx to be able to route to different partitions
 def _partition_from_hash(key: str) -> int:
@@ -41,6 +52,78 @@ def _partition_from_user_id(user_id: str) -> int:
     return _partition_from_hash(user_id)
 
 
+def _reply_consumer_loop(partition: int):
+    consumer = Consumer(
+        {
+            "bootstrap.servers": BOOTSTRAP,
+            "group.id": f"api-gateway-replies-{partition}",
+            "auto.offset.reset": "latest",
+            "enable.auto.commit": False,
+        }
+    )
+    topic_partitions = [
+        TopicPartition(topic, partition, OFFSET_END) for topic in REPLY_TOPICS
+    ]
+    consumer.assign(topic_partitions)
+    consumer.poll(0)
+    _reply_consumer_ready[partition].set()
+
+    try:
+        while True:
+            msg = consumer.poll(1.0)
+            if msg is None:
+                continue
+            if msg.error():
+                app.logger.error("Kafka reply consumer error: %s", msg.error())
+                continue
+
+            try:
+                data = msgspec.json.decode(msg.value(), type=dict)
+            except Exception as exc:
+                app.logger.warning("Failed to decode gateway reply: %s", exc)
+                continue
+
+            request_id = str(data.get("request_id", ""))
+            if not request_id:
+                continue
+
+            with _pending_lock:
+                pending = _pending_requests.get(request_id)
+
+            if pending is None:
+                continue
+            if msg.topic() != pending["reply_topic"]:
+                continue
+            if msg.partition() != pending["partition"]:
+                continue
+
+            pending["response"] = (
+                int(data.get("status_code", 500)),
+                data.get("body", ""),
+            )
+            pending["event"].set()
+    finally:
+        consumer.close()
+
+
+def _start_reply_consumers():
+    for partition in range(PARTITIONS):
+        thread = _reply_consumer_threads.get(partition)
+        if thread is not None and thread.is_alive():
+            continue
+        thread = threading.Thread(
+            target=_reply_consumer_loop,
+            args=(partition,),
+            daemon=True,
+        )
+        thread.start()
+        _reply_consumer_threads[partition] = thread
+        app.logger.info(
+            "gateway reply consumer thread started partition=%s",
+            partition,
+        )
+
+
 def _send_command(
     command_topic: str,
     reply_topic: str,
@@ -55,45 +138,33 @@ def _send_command(
         "method": method,
         "action": action,
     }
+    if not _reply_consumer_ready[partition].wait(timeout=5):
+        return 503, {"error": "Gateway reply consumer not ready"}
 
-    consumer = Consumer(
-        {
-            "bootstrap.servers": BOOTSTRAP,
-            "group.id": f"api-gateway-{request_id}",
-            "auto.offset.reset": "latest",
-            "enable.auto.commit": False,
-        }
-    )
-    consumer.assign([TopicPartition(reply_topic, partition, OFFSET_END)])
-    # Ensure reply consumer is attached before publishing command.
-    consumer.poll(0)
-
-    producer.produce(
-        command_topic,
-        key=key.encode(),
-        value=msgspec.json.encode(payload),
-        partition=partition,
-    )
-    producer.flush(2)
+    pending = {
+        "event": threading.Event(),
+        "response": None,
+        "reply_topic": reply_topic,
+        "partition": partition,
+    }
+    with _pending_lock:
+        _pending_requests[request_id] = pending
 
     try:
-        deadline = time.time() + REQUEST_TIMEOUT_SECONDS
-        while True:
-            remaining = max(0.0, deadline - time.time())
-            if remaining == 0.0:
-                return 504, {"error": "Gateway timeout waiting for service reply"}
-            msg = consumer.poll(remaining)
-            if msg is None:
-                continue
-            if msg.error():
-                return 502, {"error": str(msg.error())}
+        producer.produce(
+            command_topic,
+            key=key.encode(),
+            value=msgspec.json.encode(payload),
+            partition=partition,
+        )
+        producer.flush(2)
 
-            data = msgspec.json.decode(msg.value(), type=dict)
-            if data.get("request_id") != request_id:
-                continue
-            return int(data.get("status_code", 500)), data.get("body", "")
+        if not pending["event"].wait(timeout=REQUEST_TIMEOUT_SECONDS):
+            return 504, {"error": "Gateway timeout waiting for service reply"}
+        return pending["response"]
     finally:
-        consumer.close()
+        with _pending_lock:
+            _pending_requests.pop(request_id, None)
 
 
 def _to_response(status_code: int, body: object):
@@ -283,4 +354,7 @@ def payment_pay(user_id: str, amount: int):
 
 
 if __name__ == "__main__":
+    _start_reply_consumers()
     app.run(host="0.0.0.0", port=5000)
+else:
+    _start_reply_consumers()
