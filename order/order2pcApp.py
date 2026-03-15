@@ -82,6 +82,16 @@ def _partition_from_item_id(item_id: str) -> int:
 def _partition_from_user_id(user_id: str) -> int:
     return _partition_from_prefixed_id(user_id, "p")
 
+
+def _stock_participant_partition(items: list[tuple[str, int]]) -> int:
+    if not items:
+        return KAFKA_CONSUMER_PARTITION
+    partitions = {_partition_from_item_id(item_id) for item_id, _ in items}
+    if len(partitions) != 1:
+        raise ValueError("2PC checkout requires all items to belong to one stock partition")
+    return next(iter(partitions))
+
+
 def publish_find_stock(order_id: str, item_id: str, quantity: int):
     message = FindStock(order_id=order_id, item_id=item_id, quantity=int(quantity))
 
@@ -145,22 +155,42 @@ def publish_checkout_requested(order_id: str):
 
 def publish_prepare_stock(tx_id: str, items: list[tuple[str, int]]):
     message = PrepareStockRequest(tx_id=tx_id, items=items)
-    publish(topic="2pc.stock.prepare", key=tx_id, value=message, partition=KAFKA_CONSUMER_PARTITION)
+    publish(
+        topic="2pc.stock.prepare",
+        key=tx_id,
+        value=message,
+        partition=_stock_participant_partition(items),
+    )
 
 
 def publish_prepare_payment(tx_id: str, user_id: str, amount: int):
     message = PreparePaymentRequest(tx_id=tx_id, user_id=user_id, amount=int(amount))
-    publish(topic="2pc.payment.prepare", key=tx_id, value=message, partition=KAFKA_CONSUMER_PARTITION)
+    publish(
+        topic="2pc.payment.prepare",
+        key=tx_id,
+        value=message,
+        partition=_partition_from_user_id(user_id),
+    )
 
 
-def publish_stock_decision(tx_id: str, decision: str):
+def publish_stock_decision(tx_id: str, decision: str, items: list[tuple[str, int]]):
     message = StockDecisionRequest(tx_id=tx_id, decision=decision)
-    publish(topic="2pc.stock.decision", key=tx_id, value=message, partition=KAFKA_CONSUMER_PARTITION)
+    publish(
+        topic="2pc.stock.decision",
+        key=tx_id,
+        value=message,
+        partition=_stock_participant_partition(items),
+    )
 
 
-def publish_payment_decision(tx_id: str, decision: str):
+def publish_payment_decision(tx_id: str, decision: str, user_id: str):
     message = PaymentDecisionRequest(tx_id=tx_id, decision=decision)
-    publish(topic="2pc.payment.decision", key=tx_id, value=message, partition=KAFKA_CONSUMER_PARTITION)
+    publish(
+        topic="2pc.payment.decision",
+        key=tx_id,
+        value=message,
+        partition=_partition_from_user_id(user_id),
+    )
 
 
 def handle_find_stock_reply(message: FindStockReply):
@@ -292,8 +322,8 @@ def _maybe_decide_and_broadcast(tx_id: str, tx: "CheckoutTransaction"):
     tx.decision = "COMMIT" if prepare_success else "ABORT"
     tx.state = "DECIDED"
     set_tx(tx_id, tx)
-    publish_stock_decision(tx_id, tx.decision)
-    publish_payment_decision(tx_id, tx.decision)
+    publish_stock_decision(tx_id, tx.decision, tx.items)
+    publish_payment_decision(tx_id, tx.decision, tx.user_id)
 
 
 def _maybe_complete(tx_id: str, tx: "CheckoutTransaction"):
@@ -333,7 +363,7 @@ def handle_stock_decision_reply(message: StockDecisionReply):
     _set_decision_reply(tx, "stock", message.success, message.error)
     set_tx(message.tx_id, tx)
     if not message.success:
-        publish_stock_decision(message.tx_id, tx.decision)
+        publish_stock_decision(message.tx_id, tx.decision, tx.items)
         return
     _maybe_complete(message.tx_id, tx)
 
@@ -345,7 +375,7 @@ def handle_payment_decision_reply(message: PaymentDecisionReply):
     _set_decision_reply(tx, "payment", message.success, message.error)
     set_tx(message.tx_id, tx)
     if not message.success:
-        publish_payment_decision(message.tx_id, tx.decision)
+        publish_payment_decision(message.tx_id, tx.decision, tx.user_id)
         return
     _maybe_complete(message.tx_id, tx)
 
@@ -554,8 +584,8 @@ def apply_commit_effects(tx: CheckoutTransaction) -> bool:
 def replay_decision(tx_id: str, tx: CheckoutTransaction):
     if tx.decision not in {"COMMIT", "ABORT"}:
         return
-    publish_stock_decision(tx_id, tx.decision)
-    publish_payment_decision(tx_id, tx.decision)
+    publish_stock_decision(tx_id, tx.decision, tx.items)
+    publish_payment_decision(tx_id, tx.decision, tx.user_id)
 
 
 def recover_in_doubt_transactions():
@@ -623,8 +653,17 @@ def process_checkout_async(order_id: str):
     )
     set_tx(tx_id, tx)
 
-    publish_prepare_stock(tx_id, items)
-    publish_prepare_payment(tx_id, order_entry.user_id, order_entry.total_cost)
+    try:
+        publish_prepare_stock(tx_id, items)
+        publish_prepare_payment(tx_id, order_entry.user_id, order_entry.total_cost)
+    except ValueError as exc:
+        tx.decision = "ABORT"
+        tx.state = "COMPLETED"
+        tx.last_error = str(exc)
+        set_tx(tx_id, tx)
+        release_checkout_lock(order_id)
+        app.logger.warning("async checkout aborted order=%s tx=%s error=%s", order_id, tx_id, exc)
+        return
     app.logger.info("async checkout started order=%s tx=%s", order_id, tx_id)
 
 
