@@ -1,0 +1,4 @@
+Ada: partitioning/replication, and the kubernetes persistency we dont use
+Galya: saga and retry logic for saga
+Marina: testing/fixing saga + 2pc and adding support for message queues and watchdog
+Oskar: async 2pc and async db calls
