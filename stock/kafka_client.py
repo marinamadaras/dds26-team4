@@ -1,7 +1,8 @@
 import os
+import time
 
 import msgspec
-from confluent_kafka import Producer, Consumer, TopicPartition, OFFSET_BEGINNING, OFFSET_END
+from confluent_kafka import Producer, Consumer, TopicPartition, OFFSET_BEGINNING, OFFSET_END, KafkaException
 
 from messages import BaseMessage, MESSAGE_TYPES
 
@@ -10,11 +11,15 @@ BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:29092")
 producer = Producer({"bootstrap.servers": BOOTSTRAP})
 
 
-def publish(topic: str, key: str, value: BaseMessage):
+def publish(topic: str, key: str, value: BaseMessage, partition: int | None = None):
+    kwargs = {}
+    if partition is not None:
+        kwargs["partition"] = partition
     producer.produce(
         topic,
         key=key.encode(),
         value=msgspec.json.encode(value),
+        **kwargs,
     )
     producer.flush(2)
 
@@ -66,16 +71,24 @@ def create_consumer(
     if partition is None:
         consumer.subscribe(topics)
     else:
-        # Below is the separate solution for partition fix
-        # offset = OFFSET_BEGINNING if auto_offset_reset == "earliest" else OFFSET_END
-        # consumer.assign([TopicPartition(topic, partition, offset) for topic in topics])
-
+        fallback_offset = OFFSET_BEGINNING if auto_offset_reset == "earliest" else OFFSET_END
         topic_partitions = [TopicPartition(topic, partition) for topic in topics]
-        committed = consumer.committed(topic_partitions, timeout=5.0)
-        # If there is no committed offset yet, start from end so only new commands are consumed.
-        assigned = [
-            TopicPartition(tp.topic, tp.partition, tp.offset if tp.offset >= 0 else OFFSET_END)
-            for tp in committed
-        ]
+        assigned = None
+        for _ in range(5):
+            try:
+                committed = consumer.committed(topic_partitions, timeout=5.0)
+                assigned = [
+                    TopicPartition(
+                        tp.topic,
+                        tp.partition,
+                        tp.offset if tp.offset >= 0 else fallback_offset,
+                    )
+                    for tp in committed
+                ]
+                break
+            except KafkaException:
+                time.sleep(1)
+        if assigned is None:
+            assigned = [TopicPartition(topic, partition, fallback_offset) for topic in topics]
         consumer.assign(assigned)
     return consumer

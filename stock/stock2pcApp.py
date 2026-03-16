@@ -2,6 +2,7 @@ import logging
 import os
 import atexit
 import threading
+import re
 import uuid
 import urllib.error
 import urllib.request
@@ -47,6 +48,13 @@ def close_db_connection():
 
 
 atexit.register(close_db_connection)
+
+
+def _partition_from_order_id(order_id: str) -> int:
+    match = re.match(r"^s(\d+)_", order_id)
+    if match:
+        return int(match.group(1))
+    return KAFKA_CONSUMER_PARTITION
 
 
 class StockValue(Struct):
@@ -114,20 +122,22 @@ def subtract_stock_core(item_id: str, amount: int) -> StockValue:
 
 
 def handle_find_stock(message: FindStock, order_id: str):
-    app.logger.info("received find.stock request order_id=%s item_id=%s qty=%s", order_id, message.item_id, message.quantity)
+    app.logger.info("received find.stock request order_id=%s item_id=%s qty=%s", message.order_id, message.item_id, message.quantity)
     item_entry = get_item_from_db_nullable(message.item_id)
     if item_entry is None:
         reply = FindStockReply(
-            order_id=order_id,
+            order_id=message.order_id,
             item_id=message.item_id,
             quantity=message.quantity,
+            idempotency_key=message.idempotency_key,
             found=False,
         )
     else:
         reply = FindStockReply(
-            order_id=order_id,
+            order_id=message.order_id,
             item_id=message.item_id,
             quantity=message.quantity,
+            idempotency_key=message.idempotency_key,
             found=True,
             stock=item_entry.stock,
             price=item_entry.price,
@@ -135,10 +145,11 @@ def handle_find_stock(message: FindStock, order_id: str):
 
     publish(
         topic="find.stock.replies",
-        key=order_id,
+        key=message.order_id,
         value=reply,
+        partition=_partition_from_order_id(message.order_id),
     )
-    app.logger.info("published find.stock.replies order_id=%s item_id=%s found=%s", order_id, message.item_id, reply.found)
+    app.logger.info("published find.stock.replies order_id=%s item_id=%s found=%s", message.order_id, message.item_id, reply.found)
 
 
 def handle_message(message: BaseMessage, key: str):
@@ -182,6 +193,7 @@ def handle_subtract_stock(message: SubtractStock):
         topic="subtract.stock.replies",
         key=message.order_id,
         value=reply,
+        partition=_partition_from_order_id(message.order_id),
     )
 
 # todo: implement stock rollback logic and adapt the reply down here
@@ -197,13 +209,24 @@ def handle_rollback_stock(message: RollbackStockRequest):
         topic="rollback.stock.replies",
         key=message.order_id,
         value=reply,
+        partition=_partition_from_order_id(message.order_id),
     )
 
 
 def handle_prepare_stock_message(message: PrepareStockRequest):
     success, error = prepare_stock_tx(message.tx_id, message.items)
-    reply = PrepareStockReply(tx_id=message.tx_id, success=success, error=error)
-    publish(topic="2pc.stock.prepare.replies", key=message.tx_id, value=reply)
+    reply = PrepareStockReply(
+        tx_id=message.tx_id,
+        coordinator_partition=message.coordinator_partition,
+        success=success,
+        error=error,
+    )
+    publish(
+        topic="2pc.stock.prepare.replies",
+        key=message.tx_id,
+        value=reply,
+        partition=message.coordinator_partition,
+    )
 
 
 def handle_stock_decision_message(message: StockDecisionRequest):
@@ -216,11 +239,17 @@ def handle_stock_decision_message(message: StockDecisionRequest):
         success, error = False, "Unsupported decision"
     reply = StockDecisionReply(
         tx_id=message.tx_id,
+        coordinator_partition=message.coordinator_partition,
         decision=decision,
         success=success,
         error=error,
     )
-    publish(topic="2pc.stock.decision.replies", key=message.tx_id, value=reply)
+    publish(
+        topic="2pc.stock.decision.replies",
+        key=message.tx_id,
+        value=reply,
+        partition=message.coordinator_partition,
+    )
 
 def consumer_loop():
     app.logger.info(

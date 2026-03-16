@@ -2,6 +2,7 @@ import logging
 import os
 import atexit
 import random
+import re
 import uuid
 import threading
 from collections import defaultdict
@@ -16,7 +17,7 @@ from msgspec import msgpack, Struct
 from flask import Flask, jsonify, abort, Response
 
 from msgspec import Struct
-from kafka_client import publish, create_consumer, decode_message
+from kafka_client import publish, publish_raw, create_consumer, decode_message
 from messages import (
     BaseMessage,
     SubtractStock,
@@ -52,6 +53,32 @@ RETRY_TIMEOUT  = 30
 RETRY_INTERVAL = 10   # how often the checker wakes up
 
 _consumer_retry_counts: dict[str, int] = {}
+
+
+def _partition_from_order_id(order_id: str) -> int:
+    match = re.match(r"^s(\d+)_", order_id)
+    if match:
+        return int(match.group(1))
+    return KAFKA_CONSUMER_PARTITION
+
+
+def _partition_from_item_id(item_id: str) -> int:
+    match = re.match(r"^t(\d+)_", item_id)
+    if match:
+        return int(match.group(1))
+    return KAFKA_CONSUMER_PARTITION
+
+
+def _partition_from_user_id(user_id: str) -> int:
+    match = re.match(r"^p(\d+)_", user_id)
+    if match:
+        return int(match.group(1))
+    return KAFKA_CONSUMER_PARTITION
+
+
+def _stock_service_url(item_id: str, path: str) -> str:
+    partition = _partition_from_item_id(item_id)
+    return f"http://stock-service-{partition}:5000/{path.lstrip('/')}"
 
 def close_db_connection():
     db.close()
@@ -171,7 +198,12 @@ def _resend_outgoing_record(record: OutgoingMessageRecord) -> None:
     topic, message_cls = entry
     message = msgpack.decode(record.payload, type=message_cls)
 
-    publish(topic=topic, key=record.order_id, value=message)
+    publish(
+        topic=topic,
+        key=record.order_id,
+        value=message,
+        partition=_partition_from_order_id(record.order_id),
+    )
 
 # for when you have sent  a message but did not receive and answer
 def check_and_retry_pending_messages() -> None:
@@ -379,8 +411,9 @@ def publish_find_stock(order_id: str, item_id: str, quantity: int):
 
     publish(
         topic="find.stock",
-        key=order_id,
+        key=item_id,
         value=message,
+        partition=_partition_from_item_id(item_id),
     )
 
 
@@ -398,8 +431,9 @@ def publish_subtract_stock(order_id: str, item_id: str, quantity: int):
 
     publish(
         topic="subtract.stock",
-        key=message.order_id,
+        key=message.item_id,
         value=message,
+        partition=_partition_from_item_id(message.item_id),
     )
 
 
@@ -412,7 +446,12 @@ def publish_payment(order_id: str, user_id: str, amount: int):
         amount=int(amount),
     )
     log_outgoing_message(idem_key, "payment", order_id, message)
-    publish(topic="payment", key=order_id, value=message)
+    publish(
+        topic="payment",
+        key=user_id,
+        value=message,
+        partition=_partition_from_user_id(user_id),
+    )
 
 
 
@@ -425,7 +464,12 @@ def publish_rollback_stock(order_id: str, item_id: str, quantity: int):
         quantity=int(quantity),
     )
     log_outgoing_message(idem_key, "rollback_stock", order_id, message)
-    publish(topic="rollback.stock", key=order_id, value=message)
+    publish(
+        topic="rollback.stock",
+        key=item_id,
+        value=message,
+        partition=_partition_from_item_id(item_id),
+    )
 
 
 def publish_rollback_payment(order_id: str, user_id: str, amount: int):
@@ -437,7 +481,12 @@ def publish_rollback_payment(order_id: str, user_id: str, amount: int):
         amount=int(amount),
     )
     log_outgoing_message(idem_key, "rollback_payment", order_id, message)
-    publish(topic="rollback.payment", key=order_id, value=message)
+    publish(
+        topic="rollback.payment",
+        key=user_id,
+        value=message,
+        partition=_partition_from_user_id(user_id),
+    )
 
 
 def maybe_commit_checkout(order_id: str, order: OrderValue) -> None:
@@ -690,6 +739,7 @@ def consumer_loop():
             _consumer_retry_counts.pop(key, None)
 
         except Exception as e:
+            app.logger.exception("Processing error in order consumer: %s", e)
 
             _consumer_retry_counts[key] = _consumer_retry_counts.get(key, 0) + 1
             attempt = _consumer_retry_counts[key]
@@ -814,7 +864,7 @@ def find_order(order_id: str):
 
 def send_post_request(url: str):
     try:
-        response = requests.post(url)
+        response = requests.post(url, timeout=5)
     except requests.exceptions.RequestException:
         abort(400, REQ_ERROR_STR)
     else:
@@ -823,7 +873,7 @@ def send_post_request(url: str):
 
 def send_get_request(url: str):
     try:
-        response = requests.get(url)
+        response = requests.get(url, timeout=5)
     except requests.exceptions.RequestException:
         abort(400, REQ_ERROR_STR)
     else:
@@ -833,7 +883,7 @@ def send_get_request(url: str):
 @app.post('/addItem/<order_id>/<item_id>/<quantity>')
 def add_item(order_id: str, item_id: str, quantity: int):
     order_entry: OrderValue = get_order_from_db(order_id)
-    item_reply = send_get_request(f"{GATEWAY_URL}/stock/find/{item_id}")
+    item_reply = send_get_request(_stock_service_url(item_id, f"/find/{item_id}"))
     if item_reply.status_code != 200:
         abort(400, f"Item: {item_id} does not exist!")
 
@@ -922,4 +972,3 @@ else:
         gunicorn_logger = logging.getLogger('gunicorn.error')
         app.logger.handlers = gunicorn_logger.handlers
         app.logger.setLevel(gunicorn_logger.level)
-

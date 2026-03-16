@@ -33,6 +33,17 @@ Basic project structure with Python's Flask and Redis.
 After coding the REST endpoint logic run `docker-compose up --build` in the base folder to test if your logic is correct
 (you can use the provided tests in the `\test` folder and change them as you wish). 
 
+To switch all services between implementation variants (`2pc` vs `saga`), use a root `.env` file:
+
+1. `cp .env.example .env`
+2. Edit these variables in `.env`:
+   - `ORDER_APP_MODULE`
+   - `PAYMENT_APP_MODULE`
+   - `STOCK_APP_MODULE`
+3. Start the stack: `docker compose up --build`
+
+Set all three to `app` for Saga mode, or keep `order2pcApp` / `payment2pcApp` / `stock2pcApp` for 2PC mode.
+
 ***Requirements:*** You need to have docker and docker-compose installed on your machine. 
 
 K8s is also possible, but we do not require it as part of your submission. 

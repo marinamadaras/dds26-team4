@@ -9,7 +9,7 @@ class PaymentRequest(BaseMessage):
     order_id: str
     user_id: str
     amount: int
-    idempotency_key: str
+    idempotency_key: str = ""
     type: str = "PaymentRequest"
 
 
@@ -18,7 +18,7 @@ class PaymentReply(BaseMessage):
     user_id: str
     amount: int
     success: bool
-    idempotency_key: str
+    idempotency_key: str = ""
     error: str | None = None
     type: str = "PaymentReply"
 
@@ -27,7 +27,7 @@ class RollbackPaymentRequest(BaseMessage):
     order_id: str
     user_id: str
     amount: int
-    idempotency_key: str
+    idempotency_key: str = ""
     type: str = "RollbackPaymentRequest"
 
 
@@ -36,13 +36,14 @@ class RollbackPaymentReply(BaseMessage):
     user_id: str
     amount: int
     success: bool
-    idempotency_key: str
+    idempotency_key: str = ""
     error: str | None = None
     type: str = "RollbackPaymentReply"
 
 
 class PreparePaymentRequest(BaseMessage):
     tx_id: str
+    coordinator_partition: int
     user_id: str
     amount: int
     type: str = "PreparePaymentRequest"
@@ -50,6 +51,7 @@ class PreparePaymentRequest(BaseMessage):
 
 class PreparePaymentReply(BaseMessage):
     tx_id: str
+    coordinator_partition: int
     success: bool
     error: str | None = None
     type: str = "PreparePaymentReply"
@@ -57,12 +59,14 @@ class PreparePaymentReply(BaseMessage):
 
 class PaymentDecisionRequest(BaseMessage):
     tx_id: str
+    coordinator_partition: int
     decision: str
     type: str = "PaymentDecisionRequest"
 
 
 class PaymentDecisionReply(BaseMessage):
     tx_id: str
+    coordinator_partition: int
     decision: str
     success: bool
     error: str | None = None

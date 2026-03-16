@@ -1,6 +1,7 @@
 services:
   gateway:
     image: nginx:1.25-bookworm
+    restart: unless-stopped
     volumes:
       - ./gateway_nginx.conf:/etc/nginx/nginx.conf:ro
     ports:
@@ -12,6 +13,7 @@ services:
     image: apache/kafka:latest
     hostname: kafka
     container_name: kafka
+    restart: unless-stopped
     ports:
       - "9092:9092"
     environment:
@@ -33,18 +35,12 @@ services:
 
       KAFKA_LOG_DIRS: /tmp/kraft-combined-logs
       CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
-    healthcheck:
-      test: [ "CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server kafka:29092 >/dev/null 2>&1" ]
-      interval: 5s
-      timeout: 5s
-      retries: 20
-      start_period: 10s
 
   kafka-init:
     image: apache/kafka:latest
     depends_on:
       kafka:
-        condition: service_healthy
+        condition: service_started
     volumes:
       - ./kafka/init-topics.sh:/init-topics.sh
       - ./kafka/topics.txt:/topics.txt
@@ -53,219 +49,250 @@ services:
   api-gateway:
     build: ./api-gateway
     image: api-gateway:latest
+    restart: unless-stopped
     environment:
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
       - KAFKA_PARTITIONS=3
       - KAFKA_REQUEST_TIMEOUT_SECONDS=10
     depends_on:
       kafka:
-        condition: service_healthy
+        condition: service_started
       kafka-init:
         condition: service_completed_successfully
 
   order-service-0:
     build: ./order
     image: order:latest
+    restart: unless-stopped
     environment:
       - GATEWAY_URL=http://gateway:80
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
       - KAFKA_CONSUMER_PARTITION=0
       - KAFKA_CONSUMER_INSTANCE_ID=order-service-0
       - REDIS_HOST=order-db-0
-    command: gunicorn -b 0.0.0.0:5000 -w 1 --timeout 30 --log-level=info order2pcApp:app
+    command: gunicorn -b 0.0.0.0:5000 -w 1 --timeout 30 --log-level=info ${ORDER_APP_MODULE:-order2pcApp}:app
     env_file:
       - env/order_redis.env
     depends_on:
       order-db-0:
         condition: service_started
       kafka:
-        condition: service_healthy
+        condition: service_started
       kafka-init:
         condition: service_completed_successfully
 
   order-service-1:
     image: order:latest
+    restart: unless-stopped
     environment:
       - GATEWAY_URL=http://gateway:80
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
       - KAFKA_CONSUMER_PARTITION=1
       - KAFKA_CONSUMER_INSTANCE_ID=order-service-1
       - REDIS_HOST=order-db-1
-    command: gunicorn -b 0.0.0.0:5000 -w 1 --timeout 30 --log-level=info order2pcApp:app
+    command: gunicorn -b 0.0.0.0:5000 -w 1 --timeout 30 --log-level=info ${ORDER_APP_MODULE:-order2pcApp}:app
     env_file:
       - env/order_redis.env
     depends_on:
       order-db-1:
         condition: service_started
       kafka:
-        condition: service_healthy
+        condition: service_started
       kafka-init:
         condition: service_completed_successfully
 
   order-service-2:
     image: order:latest
+    restart: unless-stopped
     environment:
       - GATEWAY_URL=http://gateway:80
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
       - KAFKA_CONSUMER_PARTITION=2
       - KAFKA_CONSUMER_INSTANCE_ID=order-service-2
       - REDIS_HOST=order-db-2
-    command: gunicorn -b 0.0.0.0:5000 -w 1 --timeout 30 --log-level=info order2pcApp:app
+    command: gunicorn -b 0.0.0.0:5000 -w 1 --timeout 30 --log-level=info ${ORDER_APP_MODULE:-order2pcApp}:app
     env_file:
       - env/order_redis.env
     depends_on:
       order-db-2:
         condition: service_started
       kafka:
-        condition: service_healthy
+        condition: service_started
       kafka-init:
         condition: service_completed_successfully
 
   order-db-0:
     image: redis:7.2-bookworm
+    restart: unless-stopped
     command: redis-server --requirepass redis --maxmemory 512mb
 
   order-db-1:
     image: redis:7.2-bookworm
+    restart: unless-stopped
     command: redis-server --requirepass redis --maxmemory 512mb
 
   order-db-2:
     image: redis:7.2-bookworm
+    restart: unless-stopped
     command: redis-server --requirepass redis --maxmemory 512mb
 
   stock-service-0:
     build: ./stock
     image: stock:latest
+    restart: unless-stopped
     environment:
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
       - KAFKA_CONSUMER_PARTITION=0
       - KAFKA_CONSUMER_INSTANCE_ID=stock-service-0
       - REDIS_HOST=stock-db-0
-    command: gunicorn -b 0.0.0.0:5000 -w 1 --timeout 30 --log-level=info stock2pcApp:app
+    command: gunicorn -b 0.0.0.0:5000 -w 1 --timeout 30 --log-level=info ${STOCK_APP_MODULE:-stock2pcApp}:app
     env_file:
       - env/stock_redis.env
     depends_on:
       stock-db-0:
         condition: service_started
       kafka:
-        condition: service_healthy
+        condition: service_started
       kafka-init:
         condition: service_completed_successfully
 
   stock-service-1:
     image: stock:latest
+    restart: unless-stopped
     environment:
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
       - KAFKA_CONSUMER_PARTITION=1
       - KAFKA_CONSUMER_INSTANCE_ID=stock-service-1
       - REDIS_HOST=stock-db-1
-    command: gunicorn -b 0.0.0.0:5000 -w 1 --timeout 30 --log-level=info stock2pcApp:app
+    command: gunicorn -b 0.0.0.0:5000 -w 1 --timeout 30 --log-level=info ${STOCK_APP_MODULE:-stock2pcApp}:app
     env_file:
       - env/stock_redis.env
     depends_on:
       stock-db-1:
         condition: service_started
       kafka:
-        condition: service_healthy
+        condition: service_started
       kafka-init:
         condition: service_completed_successfully
 
   stock-service-2:
     image: stock:latest
+    restart: unless-stopped
     environment:
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
       - KAFKA_CONSUMER_PARTITION=2
       - KAFKA_CONSUMER_INSTANCE_ID=stock-service-2
       - REDIS_HOST=stock-db-2
-    command: gunicorn -b 0.0.0.0:5000 -w 1 --timeout 30 --log-level=info stock2pcApp:app
+    command: gunicorn -b 0.0.0.0:5000 -w 1 --timeout 30 --log-level=info ${STOCK_APP_MODULE:-stock2pcApp}:app
     env_file:
       - env/stock_redis.env
     depends_on:
       stock-db-2:
         condition: service_started
       kafka:
-        condition: service_healthy
+        condition: service_started
       kafka-init:
         condition: service_completed_successfully
 
   stock-db-0:
     image: redis:7.2-bookworm
+    restart: unless-stopped
     command: redis-server --requirepass redis --maxmemory 512mb
 
   stock-db-1:
     image: redis:7.2-bookworm
+    restart: unless-stopped
     command: redis-server --requirepass redis --maxmemory 512mb
 
   stock-db-2:
     image: redis:7.2-bookworm
+    restart: unless-stopped
     command: redis-server --requirepass redis --maxmemory 512mb
 
   payment-service-0:
     build: ./payment
     image: user:latest
+    restart: unless-stopped
     environment:
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
       - KAFKA_CONSUMER_PARTITION=0
       - KAFKA_CONSUMER_INSTANCE_ID=payment-service-0
       - REDIS_HOST=payment-db-0
-    command: gunicorn -b 0.0.0.0:5000 -w 1 --timeout 30 --log-level=info payment2pcApp:app
+    command: gunicorn -b 0.0.0.0:5000 -w 1 --timeout 30 --log-level=info ${PAYMENT_APP_MODULE:-payment2pcApp}:app
     env_file:
       - env/payment_redis.env
     depends_on:
       payment-db-0:
         condition: service_started
       kafka:
-        condition: service_healthy
+        condition: service_started
       kafka-init:
         condition: service_completed_successfully
 
   payment-service-1:
     image: user:latest
+    restart: unless-stopped
     environment:
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
       - KAFKA_CONSUMER_PARTITION=1
       - KAFKA_CONSUMER_INSTANCE_ID=payment-service-1
       - REDIS_HOST=payment-db-1
-    command: gunicorn -b 0.0.0.0:5000 -w 1 --timeout 30 --log-level=info payment2pcApp:app
+    command: gunicorn -b 0.0.0.0:5000 -w 1 --timeout 30 --log-level=info ${PAYMENT_APP_MODULE:-payment2pcApp}:app
     env_file:
       - env/payment_redis.env
     depends_on:
       payment-db-1:
         condition: service_started
       kafka:
-        condition: service_healthy
+        condition: service_started
       kafka-init:
         condition: service_completed_successfully
 
   payment-service-2:
     image: user:latest
+    restart: unless-stopped
     environment:
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
       - KAFKA_CONSUMER_PARTITION=2
       - KAFKA_CONSUMER_INSTANCE_ID=payment-service-2
       - REDIS_HOST=payment-db-2
-    command: gunicorn -b 0.0.0.0:5000 -w 1 --timeout 30 --log-level=info payment2pcApp:app
+    command: gunicorn -b 0.0.0.0:5000 -w 1 --timeout 30 --log-level=info ${PAYMENT_APP_MODULE:-payment2pcApp}:app
     env_file:
       - env/payment_redis.env
     depends_on:
       payment-db-2:
         condition: service_started
       kafka:
-        condition: service_healthy
+        condition: service_started
       kafka-init:
         condition: service_completed_successfully
 
   payment-db-0:
     image: redis:7.2-bookworm
+    restart: unless-stopped
     command: redis-server --requirepass redis --maxmemory 512mb
 
   payment-db-1:
     image: redis:7.2-bookworm
+    restart: unless-stopped
     command: redis-server --requirepass redis --maxmemory 512mb
 
   payment-db-2:
     image: redis:7.2-bookworm
+    restart: unless-stopped
     command: redis-server --requirepass redis --maxmemory 512mb
+
+  watchdog:
+    image: docker:cli
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "/watchdog/watchdog.sh"]
+    environment:
+      - COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME:-dds26-team4}
+      - WATCHDOG_INTERVAL_SECONDS=5
+      - WATCHDOG_SERVICES=order-service-0 order-service-1 order-service-2 stock-service-0 stock-service-1 stock-service-2 payment-service-0 payment-service-1 payment-service-2 order-db-0 order-db-1 order-db-2 stock-db-0 stock-db-1 stock-db-2 payment-db-0 payment-db-1 payment-db-2
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./watchdog/watchdog.sh:/watchdog/watchdog.sh:ro
 
 #  tests:
 #    image: python:3.11
