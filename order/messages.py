@@ -52,12 +52,14 @@ class CheckoutRequested(BaseMessage):
 
 class PrepareStockRequest(BaseMessage):
     tx_id: str
+    coordinator_partition: int
     items: list[tuple[str, int]]
     type: str = "PrepareStockRequest"
 
 
 class PrepareStockReply(BaseMessage):
     tx_id: str
+    coordinator_partition: int
     success: bool
     error: str | None = None
     type: str = "PrepareStockReply"
@@ -65,6 +67,7 @@ class PrepareStockReply(BaseMessage):
 
 class PreparePaymentRequest(BaseMessage):
     tx_id: str
+    coordinator_partition: int
     user_id: str
     amount: int
     type: str = "PreparePaymentRequest"
@@ -72,6 +75,7 @@ class PreparePaymentRequest(BaseMessage):
 
 class PreparePaymentReply(BaseMessage):
     tx_id: str
+    coordinator_partition: int
     success: bool
     error: str | None = None
     type: str = "PreparePaymentReply"
@@ -79,12 +83,14 @@ class PreparePaymentReply(BaseMessage):
 
 class StockDecisionRequest(BaseMessage):
     tx_id: str
+    coordinator_partition: int
     decision: str
     type: str = "StockDecisionRequest"
 
 
 class StockDecisionReply(BaseMessage):
     tx_id: str
+    coordinator_partition: int
     decision: str
     success: bool
     error: str | None = None
@@ -93,12 +99,14 @@ class StockDecisionReply(BaseMessage):
 
 class PaymentDecisionRequest(BaseMessage):
     tx_id: str
+    coordinator_partition: int
     decision: str
     type: str = "PaymentDecisionRequest"
 
 
 class PaymentDecisionReply(BaseMessage):
     tx_id: str
+    coordinator_partition: int
     decision: str
     success: bool
     error: str | None = None

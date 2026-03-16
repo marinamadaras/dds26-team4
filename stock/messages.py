@@ -64,12 +64,14 @@ class RollbackStockReply(BaseMessage):
 
 class PrepareStockRequest(BaseMessage):
     tx_id: str
+    coordinator_partition: int
     items: list[tuple[str, int]]
     type: str = "PrepareStockRequest"
 
 
 class PrepareStockReply(BaseMessage):
     tx_id: str
+    coordinator_partition: int
     success: bool
     error: str | None = None
     type: str = "PrepareStockReply"
@@ -77,12 +79,14 @@ class PrepareStockReply(BaseMessage):
 
 class StockDecisionRequest(BaseMessage):
     tx_id: str
+    coordinator_partition: int
     decision: str
     type: str = "StockDecisionRequest"
 
 
 class StockDecisionReply(BaseMessage):
     tx_id: str
+    coordinator_partition: int
     decision: str
     success: bool
     error: str | None = None

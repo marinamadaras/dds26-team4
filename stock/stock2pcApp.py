@@ -215,8 +215,18 @@ def handle_rollback_stock(message: RollbackStockRequest):
 
 def handle_prepare_stock_message(message: PrepareStockRequest):
     success, error = prepare_stock_tx(message.tx_id, message.items)
-    reply = PrepareStockReply(tx_id=message.tx_id, success=success, error=error)
-    publish(topic="2pc.stock.prepare.replies", key=message.tx_id, value=reply, partition=KAFKA_CONSUMER_PARTITION)
+    reply = PrepareStockReply(
+        tx_id=message.tx_id,
+        coordinator_partition=message.coordinator_partition,
+        success=success,
+        error=error,
+    )
+    publish(
+        topic="2pc.stock.prepare.replies",
+        key=message.tx_id,
+        value=reply,
+        partition=message.coordinator_partition,
+    )
 
 
 def handle_stock_decision_message(message: StockDecisionRequest):
@@ -229,11 +239,17 @@ def handle_stock_decision_message(message: StockDecisionRequest):
         success, error = False, "Unsupported decision"
     reply = StockDecisionReply(
         tx_id=message.tx_id,
+        coordinator_partition=message.coordinator_partition,
         decision=decision,
         success=success,
         error=error,
     )
-    publish(topic="2pc.stock.decision.replies", key=message.tx_id, value=reply, partition=KAFKA_CONSUMER_PARTITION)
+    publish(
+        topic="2pc.stock.decision.replies",
+        key=message.tx_id,
+        value=reply,
+        partition=message.coordinator_partition,
+    )
 
 def consumer_loop():
     app.logger.info(

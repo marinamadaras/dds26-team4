@@ -161,8 +161,18 @@ def handle_rollback_payment_request(message: RollbackPaymentRequest):
 
 def handle_prepare_payment_message(message: PreparePaymentRequest):
     success, error = prepare_payment_tx(message.tx_id, message.user_id, int(message.amount))
-    reply = PreparePaymentReply(tx_id=message.tx_id, success=success, error=error)
-    publish(topic="2pc.payment.prepare.replies", key=message.tx_id, value=reply, partition=KAFKA_CONSUMER_PARTITION)
+    reply = PreparePaymentReply(
+        tx_id=message.tx_id,
+        coordinator_partition=message.coordinator_partition,
+        success=success,
+        error=error,
+    )
+    publish(
+        topic="2pc.payment.prepare.replies",
+        key=message.tx_id,
+        value=reply,
+        partition=message.coordinator_partition,
+    )
 
 
 def handle_payment_decision_message(message: PaymentDecisionRequest):
@@ -175,11 +185,17 @@ def handle_payment_decision_message(message: PaymentDecisionRequest):
         success, error = False, "Unsupported decision"
     reply = PaymentDecisionReply(
         tx_id=message.tx_id,
+        coordinator_partition=message.coordinator_partition,
         decision=decision,
         success=success,
         error=error,
     )
-    publish(topic="2pc.payment.decision.replies", key=message.tx_id, value=reply, partition=KAFKA_CONSUMER_PARTITION)
+    publish(
+        topic="2pc.payment.decision.replies",
+        key=message.tx_id,
+        value=reply,
+        partition=message.coordinator_partition,
+    )
 
 
 def consumer_loop():

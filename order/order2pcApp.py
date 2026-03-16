@@ -154,7 +154,11 @@ def publish_checkout_requested(order_id: str):
 
 
 def publish_prepare_stock(tx_id: str, items: list[tuple[str, int]]):
-    message = PrepareStockRequest(tx_id=tx_id, items=items)
+    message = PrepareStockRequest(
+        tx_id=tx_id,
+        coordinator_partition=KAFKA_CONSUMER_PARTITION,
+        items=items,
+    )
     publish(
         topic="2pc.stock.prepare",
         key=tx_id,
@@ -164,7 +168,12 @@ def publish_prepare_stock(tx_id: str, items: list[tuple[str, int]]):
 
 
 def publish_prepare_payment(tx_id: str, user_id: str, amount: int):
-    message = PreparePaymentRequest(tx_id=tx_id, user_id=user_id, amount=int(amount))
+    message = PreparePaymentRequest(
+        tx_id=tx_id,
+        coordinator_partition=KAFKA_CONSUMER_PARTITION,
+        user_id=user_id,
+        amount=int(amount),
+    )
     publish(
         topic="2pc.payment.prepare",
         key=tx_id,
@@ -174,7 +183,11 @@ def publish_prepare_payment(tx_id: str, user_id: str, amount: int):
 
 
 def publish_stock_decision(tx_id: str, decision: str, items: list[tuple[str, int]]):
-    message = StockDecisionRequest(tx_id=tx_id, decision=decision)
+    message = StockDecisionRequest(
+        tx_id=tx_id,
+        coordinator_partition=KAFKA_CONSUMER_PARTITION,
+        decision=decision,
+    )
     publish(
         topic="2pc.stock.decision",
         key=tx_id,
@@ -184,7 +197,11 @@ def publish_stock_decision(tx_id: str, decision: str, items: list[tuple[str, int
 
 
 def publish_payment_decision(tx_id: str, decision: str, user_id: str):
-    message = PaymentDecisionRequest(tx_id=tx_id, decision=decision)
+    message = PaymentDecisionRequest(
+        tx_id=tx_id,
+        coordinator_partition=KAFKA_CONSUMER_PARTITION,
+        decision=decision,
+    )
     publish(
         topic="2pc.payment.decision",
         key=tx_id,
