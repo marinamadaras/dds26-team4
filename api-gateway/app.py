@@ -167,6 +167,42 @@ def _send_command(
             _pending_requests.pop(request_id, None)
 
 
+def _broadcast_command(
+    command_topic: str,
+    reply_topic: str,
+    method: str,
+    action: str,
+):
+    results = []
+    for partition in range(PARTITIONS):
+        status, body = _send_command(
+            command_topic=command_topic,
+            reply_topic=reply_topic,
+            key=f"{action}:{partition}",
+            partition=partition,
+            method=method,
+            action=action,
+        )
+        results.append(
+            {
+                "partition": partition,
+                "status_code": status,
+                "body": body,
+            }
+        )
+
+    failures = [result for result in results if result["status_code"] >= 400]
+    if failures:
+        return 502, {
+            "error": "Batch init failed on one or more partitions",
+            "results": results,
+        }
+    return 200, {
+        "msg": "Batch init successful",
+        "results": results,
+    }
+
+
 def _to_response(status_code: int, body: object):
     if isinstance(body, dict):
         return jsonify(body), status_code
@@ -233,6 +269,17 @@ def order_checkout(order_id: str):
     return _to_response(status, body)
 
 
+@app.post("/orders/batch_init/<n>/<n_items>/<n_users>/<item_price>")
+def order_batch_init(n: int, n_items: int, n_users: int, item_price: int):
+    status, body = _broadcast_command(
+        command_topic="gateway.order.commands",
+        reply_topic="gateway.order.replies",
+        method="POST",
+        action=f"batch_init/{n}/{n_items}/{n_users}/{item_price}",
+    )
+    return _to_response(status, body)
+
+
 @app.post("/stock/item/create/<price>")
 @app.post("/item/create/<price>")
 def stock_create(price: int):
@@ -244,6 +291,17 @@ def stock_create(price: int):
         partition=partition,
         method="POST",
         action=f"item/create/{price}",
+    )
+    return _to_response(status, body)
+
+
+@app.post("/stock/batch_init/<n>/<starting_stock>/<item_price>")
+def stock_batch_init(n: int, starting_stock: int, item_price: int):
+    status, body = _broadcast_command(
+        command_topic="gateway.stock.commands",
+        reply_topic="gateway.stock.replies",
+        method="POST",
+        action=f"batch_init/{n}/{starting_stock}/{item_price}",
     )
     return _to_response(status, body)
 
@@ -289,6 +347,17 @@ def stock_subtract(item_id: str, amount: int):
         partition=partition,
         method="POST",
         action=f"subtract/{item_id}/{amount}",
+    )
+    return _to_response(status, body)
+
+
+@app.post("/payment/batch_init/<n>/<starting_money>")
+def payment_batch_init(n: int, starting_money: int):
+    status, body = _broadcast_command(
+        command_topic="gateway.payment.commands",
+        reply_topic="gateway.payment.replies",
+        method="POST",
+        action=f"batch_init/{n}/{starting_money}",
     )
     return _to_response(status, body)
 
