@@ -31,6 +31,7 @@ SUPPORTED_METHODS = {"GET", "POST"}
 SUPPORTED_TASK_PROTOCOLS = {"http", "kafka"}
 TASK_KEY_PREFIX = "task:"
 
+
 db: redis.Redis = redis.Redis(
     host=os.getenv("REDIS_HOST", "orchestrator-db"),
     port=int(os.getenv("REDIS_PORT", "6379")),
@@ -39,7 +40,6 @@ db: redis.Redis = redis.Redis(
     decode_responses=True,
 )
 producer = Producer({"bootstrap.servers": KAFKA_BOOTSTRAP_SERVERS})
-
 
 def close_db_connection():
     # Close the Redis client cleanly on shutdown.
