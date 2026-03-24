@@ -40,6 +40,9 @@ KAFKA_CONSUMER_PARTITION = int(os.getenv("KAFKA_CONSUMER_PARTITION", "0"))
 KAFKA_CONSUMER_INSTANCE_ID = os.getenv("KAFKA_CONSUMER_INSTANCE_ID", "order-service-0")
 PARTITIONS = int(os.getenv("KAFKA_PARTITIONS", "3"))
 
+# All outgoing Kafka messages are routed through the orchestrator.
+ORCHESTRATOR_URL = os.environ.get("ORCHESTRATOR_URL", "http://orchestrator-service:5000")
+
 app = Flask("order-service")
 _consumer_thread: threading.Thread | None = None
 
@@ -55,6 +58,35 @@ RETRY_INTERVAL = 10   # how often the checker wakes up
 
 _consumer_retry_counts: dict[str, int] = {}
 
+
+
+def _submit_kafka_task(*, topic: str, key: str, payload: dict, partition: int) -> None:
+    """
+    POST a fire-and-forget Kafka task to the orchestrator.
+    The outgoing-message record is already written before this is called,
+    so if the orchestrator is momentarily unreachable the retry checker
+    will resend via _resend_outgoing_record.
+    """
+    task = {
+        "task_name": f"publish_{topic.replace('.', '_')}",
+        "source_service": "order",
+        "target_service": "kafka",
+        "protocol": "kafka",
+        "request": {
+            "topic": topic,
+            "key": key,
+            "payload": payload,
+            "partition": partition,
+            "await_reply": False,
+        },
+    }
+    try:
+        requests.post(f"{ORCHESTRATOR_URL}/submit_task", json=task, timeout=5)
+    except requests.exceptions.RequestException:
+        app.logger.warning(
+            "Orchestrator unreachable for topic %s — outgoing record logged, "
+            "retry checker will resend.", topic
+        )
 
 def _partition_from_order_id(order_id: str) -> int:
     match = re.match(r"^s(\d+)_", order_id)
@@ -199,12 +231,10 @@ def _resend_outgoing_record(record: OutgoingMessageRecord) -> None:
     topic, message_cls = entry
     message = msgpack.decode(record.payload, type=message_cls)
 
-    publish(
-        topic=topic,
-        key=record.order_id,
-        value=message,
-        partition=_partition_from_order_id(record.order_id),
-    )
+    payload = {f: getattr(message, f) for f in message.__struct_fields__}
+    payload["type"] = message_cls.__name__
+
+    _submit_kafka_task(topic=topic, key=key, payload=payload, partition=partition)
 
 # for when you have sent  a message but did not receive and answer
 def check_and_retry_pending_messages() -> None:
@@ -404,16 +434,17 @@ def start_consumer():
 atexit.register(close_db_connection)
 
 def publish_find_stock(order_id: str, item_id: str, quantity: int):
-    message = FindStock(
-        idempotency_key=make_idempotency_key(order_id, "find_stock", item_id, quantity),
-        item_id=item_id,
-        quantity=int(quantity),
-    )
 
-    publish(
+    payload = {
+        "type": "FindStock",
+        "idempotency_key": make_idempotency_key(order_id, "find_stock", item_id, quantity),
+        "item_id": item_id,
+        "quantity": int(quantity),
+    }
+    _submit_kafka_task(
         topic="find.stock",
         key=item_id,
-        value=message,
+        payload=payload,
         partition=_partition_from_item_id(item_id),
     )
 
@@ -430,11 +461,17 @@ def publish_subtract_stock(order_id: str, item_id: str, quantity: int):
     # log before sending
     log_outgoing_message(idempotency_key, "subtract_stock", order_id, message)
 
-    publish(
+    _submit_kafka_task(
         topic="subtract.stock",
-        key=message.item_id,
-        value=message,
-        partition=_partition_from_item_id(message.item_id),
+        key=item_id,
+        payload={
+            "type": "SubtractStock",
+            "idempotency_key": idempotency_key,
+            "order_id": order_id,
+            "item_id": item_id,
+            "quantity": int(quantity),
+        },
+        partition=_partition_from_item_id(item_id),
     )
 
 
@@ -447,10 +484,16 @@ def publish_payment(order_id: str, user_id: str, amount: int):
         amount=int(amount),
     )
     log_outgoing_message(idem_key, "payment", order_id, message)
-    publish(
+    _submit_kafka_task(
         topic="payment",
         key=user_id,
-        value=message,
+        payload={
+            "type": "PaymentRequest",
+            "idempotency_key": idem_key,
+            "order_id": order_id,
+            "user_id": user_id,
+            "amount": int(amount),
+        },
         partition=_partition_from_user_id(user_id),
     )
 
@@ -465,10 +508,16 @@ def publish_rollback_stock(order_id: str, item_id: str, quantity: int):
         quantity=int(quantity),
     )
     log_outgoing_message(idem_key, "rollback_stock", order_id, message)
-    publish(
+    _submit_kafka_task(
         topic="rollback.stock",
         key=item_id,
-        value=message,
+        payload={
+            "type": "RollbackStockRequest",
+            "idempotency_key": idem_key,
+            "order_id": order_id,
+            "item_id": item_id,
+            "quantity": int(quantity),
+        },
         partition=_partition_from_item_id(item_id),
     )
 
@@ -482,10 +531,16 @@ def publish_rollback_payment(order_id: str, user_id: str, amount: int):
         amount=int(amount),
     )
     log_outgoing_message(idem_key, "rollback_payment", order_id, message)
-    publish(
+    _submit_kafka_task(
         topic="rollback.payment",
         key=user_id,
-        value=message,
+        payload={
+            "type": "RollbackPaymentRequest",
+            "idempotency_key": idem_key,
+            "order_id": order_id,
+            "user_id": user_id,
+            "amount": int(amount),
+        },
         partition=_partition_from_user_id(user_id),
     )
 
