@@ -115,6 +115,23 @@ def subtract_stock_core(item_id: str, amount: int) -> StockValue:
         raise ValueError(f"Item: {item_id} stock cannot get reduced below zero!")
     return item_entry
 
+def _submit_kafka_task(topic: str, idempotency_key: str, key: str, message: BaseMessage, partition: int) -> None:
+    task = {
+        "idempotency_key": idempotency_key, # used as id for the task
+
+        # actual request
+        "request": {
+            "topic": topic, # to which service we route the request
+            "key": key, # the key for that service
+            "message": message, # the actual message we send
+            "partition" : partition
+        }
+    }
+
+    # TODO: partitions for orchestrator rout to partition
+    publish("orchestrator.replies", idempotency_key, task)
+
+
 
 def handle_find_stock(message: FindStock, order_id: str):
     cached = get_operation_record(message.idempotency_key)
@@ -145,10 +162,11 @@ def handle_find_stock(message: FindStock, order_id: str):
         )
 
     store_operation_record(message.idempotency_key, True, None)
-    publish(
+    _submit_kafka_task(
         topic="find.stock.replies",
+        idempotency_key=reply.idempotency_key,
         key=order_id,
-        value=reply,
+        message=reply,
         partition=_partition_from_order_id(order_id),
     )
     app.logger.info("published find.stock.replies order_id=%s item_id=%s found=%s", order_id, message.item_id, reply.found)
@@ -216,10 +234,11 @@ def handle_subtract_stock(message: SubtractStock):
             success=cached.success,
             error=cached.error,
         )
-        publish(
+        _submit_kafka_task(
             topic="subtract.stock.replies",
+            idempotency_key=message.idempotency_key,
             key=message.order_id,
-            value=reply,
+            message=reply,
             partition=_partition_from_order_id(message.order_id),
         )
         return
@@ -250,10 +269,11 @@ def handle_subtract_stock(message: SubtractStock):
             error=str(e),
         )
 
-    publish(
+    _submit_kafka_task(
         topic="subtract.stock.replies",
+        idempotency_key=message.idempotency_key,
         key=message.order_id,
-        value=reply,
+        message=reply,
         partition=_partition_from_order_id(message.order_id),
     )
 
@@ -269,10 +289,11 @@ def handle_rollback_stock(message: RollbackStockRequest):
             success=True,
             error=None,
         )
-        publish(
+        _submit_kafka_task(
             topic="rollback.stock.replies",
+            idempotency_key=message.idempotency_key,
             key=message.order_id,
-            value=reply,
+            message=reply,
             partition=_partition_from_order_id(message.order_id),
         )
         return
@@ -296,10 +317,11 @@ def handle_rollback_stock(message: RollbackStockRequest):
             quantity=message.quantity,
             success=True,
         )
-        publish(
+        _submit_kafka_task(
             topic="rollback.stock.replies",
+            idempotency_key=message.idempotency_key,
             key=message.order_id,
-            value=reply,
+            message=reply,
             partition=_partition_from_order_id(message.order_id),
         )
         return
@@ -323,10 +345,11 @@ def handle_rollback_stock(message: RollbackStockRequest):
         success=True,
     )
 
-    publish(
+    _submit_kafka_task(
         topic="rollback.stock.replies",
+        idempotency_key=message.idempotency_key,
         key=message.order_id,
-        value=reply,
+        message=reply,
         partition=_partition_from_order_id(message.order_id),
     )
 
