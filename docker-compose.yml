@@ -68,6 +68,8 @@ services:
       - "5001:5000"
     environment:
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+#      - KAFKA_TASKS_TOPIC=orchestrator.tasks
+      - ORCHESTRATOR_CONSUMER_GROUP=orchestrator-service
       - ORDER_SERVICE_URL=http://order-service-0:5000
       - PAYMENT_SERVICE_URL=http://payment-service-0:5000
       - STOCK_SERVICE_URL=http://stock-service-0:5000

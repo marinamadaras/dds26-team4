@@ -110,6 +110,24 @@ def remove_credit_core(user_id: str, amount: int) -> UserValue:
     return user_entry
 
 
+def _submit_kafka_task(topic: str, idempotency_key: str, key: str, message: BaseMessage, partition: int) -> None:
+    task = {
+        "idempotency_key": idempotency_key, # used as id for the task
+
+        # actual request
+        "request": {
+            "topic": topic, # to which service we route the request
+            "key": key, # the key for that service
+            "message": message, # the actual message we send
+            "partition" : partition
+        }
+    }
+
+    # TODO: partitions for orchestrator rout to partition
+    publish("orchestrator.replies", idempotency_key, task)
+
+
+
 def handle_payment_request(message: PaymentRequest):
     cached = get_operation_record(message.idempotency_key)
     if cached is not None and cached.success: ## do not retry an operation if it was succesfull the first time
@@ -121,12 +139,15 @@ def handle_payment_request(message: PaymentRequest):
             success=cached.success,
             error=cached.error,
         )
-        publish(
+
+        _submit_kafka_task(
             topic="payment.replies",
+            idempotency_key=message.idempotency_key,
             key=message.order_id,
-            value=reply,
+            message=reply,
             partition=_partition_from_order_id(message.order_id),
         )
+
         return
 
     try:
@@ -155,10 +176,11 @@ def handle_payment_request(message: PaymentRequest):
             success=False,
             error=str(e),
         )
-    publish(
+    _submit_kafka_task(
         topic="payment.replies",
+        idempotency_key=message.idempotency_key,
         key=message.order_id,
-        value=reply,
+        message=reply,
         partition=_partition_from_order_id(message.order_id),
     )
 
@@ -224,10 +246,11 @@ def handle_rollback_payment_request(message: RollbackPaymentRequest):
             success=True,
             error=None,
         )
-        publish(
+        _submit_kafka_task(
             topic="rollback.payment.replies",
+            idempotency_key=message.idempotency_key,
             key=message.order_id,
-            value=reply,
+            message=reply,
             partition=_partition_from_order_id(message.order_id),
         )
         return
@@ -251,10 +274,11 @@ def handle_rollback_payment_request(message: RollbackPaymentRequest):
             amount=message.amount,
             success=True,  # nothing to roll back, not an error
         )
-        publish(
+        _submit_kafka_task(
             topic="rollback.payment.replies",
+            idempotency_key=message.idempotency_key,
             key=message.order_id,
-            value=reply,
+            message=reply,
             partition=_partition_from_order_id(message.order_id),
         )
         return
@@ -278,10 +302,11 @@ def handle_rollback_payment_request(message: RollbackPaymentRequest):
         amount=message.amount,
         success=True,
     )
-    publish(
+    _submit_kafka_task(
         topic="rollback.payment.replies",
+        idempotency_key=message.idempotency_key,
         key=message.order_id,
-        value=reply,
+        message=reply,
         partition=_partition_from_order_id(message.order_id),
     )
 

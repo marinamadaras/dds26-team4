@@ -33,4 +33,4 @@ do
   wait "$pid"
 done
 
-echo "All topics created."
+echo

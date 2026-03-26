@@ -5,7 +5,7 @@ class BaseMessage(msgspec.Struct, kw_only=True):
     pass
 
 
-# outgoing messages from Order service
+# outgoing messages from Orchestrator service
 class FindStock(BaseMessage):
     order_id: str
     item_id: str
