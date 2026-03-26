@@ -60,33 +60,22 @@ _consumer_retry_counts: dict[str, int] = {}
 
 
 
-def _submit_kafka_task(*, topic: str, key: str, payload: dict, partition: int) -> None:
-    """
-    POST a fire-and-forget Kafka task to the orchestrator.
-    The outgoing-message record is already written before this is called,
-    so if the orchestrator is momentarily unreachable the retry checker
-    will resend via _resend_outgoing_record.
-    """
+def _submit_kafka_task(topic: str, idempotency_key: str, key: str, message: BaseMessage, partition: int) -> None:
     task = {
-        "task_name": f"publish_{topic.replace('.', '_')}",
-        "source_service": "order",
-        "target_service": "kafka",
-        "protocol": "kafka",
+        "idempotency_key": idempotency_key, # used as id for the task
+        # actual request
         "request": {
-            "topic": topic,
-            "key": key,
-            "payload": payload,
-            "partition": partition,
-            "await_reply": False,
-        },
+            "topic": topic, # to which service we route the request
+            "key": key, # the key for that service
+            "message": message, # the actual message we send
+            "partition" : partition
+        }
     }
-    try:
-        requests.post(f"{ORCHESTRATOR_URL}/submit_task", json=task, timeout=5)
-    except requests.exceptions.RequestException:
-        app.logger.warning(
-            "Orchestrator unreachable for topic %s — outgoing record logged, "
-            "retry checker will resend.", topic
-        )
+
+    # TODO: partitions for orchestrator rout to partition
+    publish("orchestrator.requests", idempotency_key, task)
+
+
 
 def _partition_from_order_id(order_id: str) -> int:
     match = re.match(r"^s(\d+)_", order_id)
@@ -189,8 +178,8 @@ def log_outgoing_message(idempotency_key: str, message_type: str, order_id: str,
     db.set(key, msgpack.encode(record))
     db.zadd("_outgoing_pending", {idempotency_key: time.time()})
 
-def mark_reply_received(idempotency_key: str):
-    """Mark that we received a reply for this message"""
+def mark_ack_received(idempotency_key: str):
+    """Mark that we received an ack for this message"""
     key = f"_outgoing:{idempotency_key}"
     raw = db.get(key)
     if raw:
@@ -198,7 +187,6 @@ def mark_reply_received(idempotency_key: str):
         record.reply_received = True
         db.set(key, msgpack.encode(record))
         db.zrem("_outgoing_pending", idempotency_key)
-
 
 # RETRY
 
@@ -263,7 +251,7 @@ def check_and_retry_pending_messages() -> None:
                 order = get_order_from_db(record.order_id)
                 latest = get_latest_log_event(record.order_id)
                 if latest not in ("cancelled", "saga_end"):
-                    compensate_order(order, record.order_id)
+                    compensate_order( record.order_id)
 
                 db.zrem("_outgoing_pending", idem_key_str)
                 continue
@@ -435,16 +423,18 @@ atexit.register(close_db_connection)
 
 def publish_find_stock(order_id: str, item_id: str, quantity: int):
 
-    payload = {
-        "type": "FindStock",
-        "idempotency_key": make_idempotency_key(order_id, "find_stock", item_id, quantity),
-        "item_id": item_id,
-        "quantity": int(quantity),
-    }
+    idempotency_key = make_idempotency_key(order_id, "find_stock", item_id, quantity)
+    message = FindStock(
+        idempotency_key=idempotency_key,
+        order_id=order_id,
+        item_id=item_id,
+        quantity=int(quantity),
+    )
     _submit_kafka_task(
         topic="find.stock",
-        key=item_id,
-        payload=payload,
+        idempotency_key = idempotency_key,
+        key = item_id,
+        message=message,
         partition=_partition_from_item_id(item_id),
     )
 
@@ -463,8 +453,9 @@ def publish_subtract_stock(order_id: str, item_id: str, quantity: int):
 
     _submit_kafka_task(
         topic="subtract.stock",
+        idempotency_key=idempotency_key,
         key=item_id,
-        payload={
+        message={
             "type": "SubtractStock",
             "idempotency_key": idempotency_key,
             "order_id": order_id,
@@ -484,16 +475,12 @@ def publish_payment(order_id: str, user_id: str, amount: int):
         amount=int(amount),
     )
     log_outgoing_message(idem_key, "payment", order_id, message)
+
     _submit_kafka_task(
         topic="payment",
+        idempotency_key=idem_key,
         key=user_id,
-        payload={
-            "type": "PaymentRequest",
-            "idempotency_key": idem_key,
-            "order_id": order_id,
-            "user_id": user_id,
-            "amount": int(amount),
-        },
+        message= message,
         partition=_partition_from_user_id(user_id),
     )
 
@@ -510,14 +497,9 @@ def publish_rollback_stock(order_id: str, item_id: str, quantity: int):
     log_outgoing_message(idem_key, "rollback_stock", order_id, message)
     _submit_kafka_task(
         topic="rollback.stock",
+        idempotency_key=idem_key,
         key=item_id,
-        payload={
-            "type": "RollbackStockRequest",
-            "idempotency_key": idem_key,
-            "order_id": order_id,
-            "item_id": item_id,
-            "quantity": int(quantity),
-        },
+        message=message,
         partition=_partition_from_item_id(item_id),
     )
 
@@ -533,14 +515,9 @@ def publish_rollback_payment(order_id: str, user_id: str, amount: int):
     log_outgoing_message(idem_key, "rollback_payment", order_id, message)
     _submit_kafka_task(
         topic="rollback.payment",
+        idempotency_key=idem_key,
         key=user_id,
-        payload={
-            "type": "RollbackPaymentRequest",
-            "idempotency_key": idem_key,
-            "order_id": order_id,
-            "user_id": user_id,
-            "amount": int(amount),
-        },
+        message=message,
         partition=_partition_from_user_id(user_id),
     )
 
@@ -574,7 +551,7 @@ def maybe_commit_checkout(order_id: str, order: OrderValue) -> None:
 
 def handle_find_stock_reply(message: FindStockReply):
     # Mark that we received this reply
-    mark_reply_received(message.idempotency_key)
+    # mark_reply_received(message.idempotency_key)
 
     if should_skip_reply_processing(message.idempotency_key):
         return
@@ -598,7 +575,7 @@ def handle_find_stock_reply(message: FindStockReply):
 
 
 def handle_stock_subtracted_reply(message: StockSubtractedReply):
-    mark_reply_received(message.idempotency_key)
+    # mark_reply_received(message.idempotency_key)
 
     if should_skip_reply_processing(message.idempotency_key):
         return
@@ -616,7 +593,7 @@ def handle_stock_subtracted_reply(message: StockSubtractedReply):
         return
 
     if not message.success:
-        compensate_order(order, order_id)
+        compensate_order(order_id)
         store_reply_processing_record(message.idempotency_key, False)
         return
 
@@ -631,7 +608,7 @@ def handle_stock_subtracted_reply(message: StockSubtractedReply):
 
 
 def handle_payment_reply(message: PaymentReply):
-    mark_reply_received(message.idempotency_key)
+    # mark_reply_received(message.idempotency_key)
 
     if should_skip_reply_processing(message.idempotency_key):
         return
@@ -664,12 +641,12 @@ def handle_payment_reply(message: PaymentReply):
         order.payment_success = False
         append_log(order_id, {"event": "payment_failed"})
         db.set(order_id, msgpack.encode(order))
-        compensate_order(order, order_id)
+        compensate_order(order_id)
         store_reply_processing_record(message.idempotency_key, False)
 
 
 def handle_rollback_stock_reply(message: RollbackStockReply):
-    mark_reply_received(message.idempotency_key)
+    # mark_reply_received(message.idempotency_key)
 
     if should_skip_reply_processing(message.idempotency_key):
         return
@@ -688,7 +665,7 @@ def handle_rollback_stock_reply(message: RollbackStockReply):
         maybe_finish_cancelled_order(message.order_id, order)
 
 def handle_rollback_payment_reply(message: RollbackPaymentReply):
-    mark_reply_received(message.idempotency_key)
+    # mark_reply_received(message.idempotency_key)
 
     if should_skip_reply_processing(message.idempotency_key):
         return
@@ -701,6 +678,13 @@ def handle_rollback_payment_reply(message: RollbackPaymentReply):
     maybe_finish_cancelled_order(message.order_id, order)
 
 def handle_message(message: BaseMessage):
+    if isinstance(message, Ack):
+        mark_ack_received(message.idempotency_key)
+        return
+
+    if isinstance(message, Failure):
+        compensate_order(message.order_id)
+        return
     if isinstance(message, FindStockReply):
         handle_find_stock_reply(message)
         return
@@ -764,6 +748,7 @@ def consumer_loop():
             "rollback.stock.replies",
             "rollback.payment.replies",
             "gateway.order.commands",
+            "orchestrator.feedback",
         ],
         auto_offset_reset="earliest",
         enable_auto_commit=False,
@@ -808,7 +793,8 @@ def consumer_loop():
 
 
 
-def compensate_order(order: OrderValue, order_id: str) -> None:
+def compensate_order(order_id: str) -> None:
+    order = get_order_from_db(order_id)
     events = set(get_log_events(order_id))
 
     if order.checkout_finalized or "cancelled" in events or "saga_end" in events:

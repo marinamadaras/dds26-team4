@@ -23,3 +23,6 @@ gateway.stock.commands
 gateway.stock.replies
 gateway.payment.commands
 gateway.payment.replies
+orchestrator.requests
+orchestrator.replies
+orchestrator.feedback
