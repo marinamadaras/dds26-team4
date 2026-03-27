@@ -111,6 +111,7 @@ def remove_credit_core(user_id: str, amount: int) -> UserValue:
 
 
 def _submit_kafka_task(topic: str, idempotency_key: str, key: str, message: BaseMessage, partition: int) -> None:
+    app.logger.info(" Send message | key=%s", "idempotency_key")
     task = {
         "idempotency_key": idempotency_key, # used as id for the task
 
@@ -129,9 +130,11 @@ def _submit_kafka_task(topic: str, idempotency_key: str, key: str, message: Base
 
 
 def handle_payment_request(message: PaymentRequest):
+    app.logger.info(" Got payment request | key=%s", message.idempotency_key)
     cached = get_operation_record(message.idempotency_key)
     if cached is not None and cached.success: ## do not retry an operation if it was succesfull the first time
         reply = PaymentReply(
+            type = "PaymentReply",
             idempotency_key=message.idempotency_key,
             order_id=message.order_id,
             user_id=message.user_id,
@@ -160,6 +163,7 @@ def handle_payment_request(message: PaymentRequest):
         pipe.execute()
 
         reply = PaymentReply(
+            type="PaymentReply",
             idempotency_key=message.idempotency_key,
             order_id=message.order_id,
             user_id=message.user_id,
@@ -169,6 +173,7 @@ def handle_payment_request(message: PaymentRequest):
     except Exception as e:
         store_operation_record(message.idempotency_key, False, str(e))
         reply = PaymentReply(
+            type="PaymentReply",
             idempotency_key=message.idempotency_key,
             order_id=message.order_id,
             user_id=message.user_id,
@@ -239,6 +244,7 @@ def handle_rollback_payment_request(message: RollbackPaymentRequest):
     cached = get_operation_record(message.idempotency_key)
     if cached is not None and cached.success:
         reply = RollbackPaymentReply(
+            type="RollbackPaymentReply",
             idempotency_key=message.idempotency_key,
             order_id=message.order_id,
             user_id=message.user_id,
@@ -268,6 +274,7 @@ def handle_rollback_payment_request(message: RollbackPaymentRequest):
         )
         store_operation_record(message.idempotency_key, True, None)
         reply = RollbackPaymentReply(
+            type="RollbackPaymentReply",
             idempotency_key=message.idempotency_key,
             order_id=message.order_id,
             user_id=message.user_id,
@@ -296,6 +303,7 @@ def handle_rollback_payment_request(message: RollbackPaymentRequest):
     pipe.execute()
 
     reply = RollbackPaymentReply(
+        type="RollbackPaymentReply",
         idempotency_key=message.idempotency_key,
         order_id=message.order_id,
         user_id=message.user_id,

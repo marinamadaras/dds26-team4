@@ -12,7 +12,7 @@ producer = Producer({"bootstrap.servers": BOOTSTRAP})
 logger = logging.getLogger(__name__)
 
 
-def publish(topic: str, key: str, value: BaseMessage, partition: int | None = None):
+def publish(topic: str, key: str, value: dict, partition: int | None = None):
     kwargs = {}
     if partition is not None:
         kwargs["partition"] = partition

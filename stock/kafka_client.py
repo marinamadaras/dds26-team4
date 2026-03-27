@@ -11,7 +11,7 @@ BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:29092")
 producer = Producer({"bootstrap.servers": BOOTSTRAP})
 
 
-def publish(topic: str, key: str, value: BaseMessage, partition: int | None = None):
+def publish(topic: str, key: str, value: dict, partition: int | None = None):
     kwargs = {}
     if partition is not None:
         kwargs["partition"] = partition
