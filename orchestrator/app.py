@@ -7,13 +7,27 @@ import uuid
 from urllib.parse import urljoin
 import logging
 from confluent_kafka import Consumer, Producer, TopicPartition, OFFSET_BEGINNING
-from kafka_client import publish, publish_raw, create_consumer
+from kafka_client import publish, create_consumer, decode_message
 import redis
 import requests
 from flask import Flask, Response, jsonify, request
-import msgpack
-from msgspec import Struct
-from typing import Optional
+import msgspec
+from messages import (
+    BaseMessage,
+    SubtractStock,
+    StockSubtractedReply,
+    FindStock,
+    FindStockReply,
+    PaymentRequest,
+    PaymentReply,
+    RollbackStockRequest,
+    RollbackStockReply,
+    RollbackPaymentRequest,
+    RollbackPaymentReply,
+    Ack,
+    Failure
+
+)
 
 
 
@@ -33,7 +47,6 @@ from typing import Optional
 # KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:29092")
 # producer = Producer({"bootstrap.servers": KAFKA_BOOTSTRAP_SERVERS})
 
-
 app = Flask("orchestrator-service")
 TASK_KEY_PREFIX = "task:"
 RETRY_INTERVAL = 5
@@ -51,18 +64,18 @@ db: redis.Redis = redis.Redis(
     db=int(os.getenv("REDIS_DB", "0")),
 )
 
-
+logging.basicConfig(level=logging.INFO)
 
 def close_db_connection():
     # Close the Redis client cleanly on shutdown.
     db.close()
-    producer.flush(2)
+
 
 
 atexit.register(close_db_connection)
 
 
-def start_consumer():
+def start_kafka_consumer():
     global _consumer_thread
     if _consumer_thread is not None and _consumer_thread.is_alive():
         return
@@ -74,6 +87,7 @@ atexit.register(close_db_connection)
 
 
 def consumer_loop():
+    app.logger.info("Start consumer loop")
     consumer = create_consumer(
         group_id="orchestrator-service",
         topics=["orchestrator.requests", "orchestrator.replies"],
@@ -83,6 +97,7 @@ def consumer_loop():
         # group_instance_id=KAFKA_CONSUMER_INSTANCE_ID,
     )
 
+
     while True:
         msg = consumer.poll(1.0)
 
@@ -91,15 +106,17 @@ def consumer_loop():
 
         if msg.error():
             continue
-
+        app.logger.info("Received Kafka message | topic=%s", msg.topic())
         key = msg.key().decode() if msg.key() else ""
 
         try:
-            task = json.loads(msg.value().decode())
-
+            task = msgspec.json.decode(msg.value(), type=dict)
+            # raw_message = task["request"]["message"]
+            # message = decode_message(msgspec.json.encode(raw_message))
+            # task["request"]["message"] = message
             threading.Thread(
-                target=_handle_task,
-                args=task,
+                target= handle_task,
+                args=(task,),
                 daemon=True,
             ).start()
             consumer.commit(message=msg)
@@ -154,26 +171,35 @@ def _get_task(idempotency_key: str) -> dict[str, object] | None:
 
 def handle_task(task:dict):
     message = task["request"].get("message")
+    message_type = message.get("type")
 
-    if isinstance(message, (FindStockReply, StockSubtractedReply,
-                            PaymentReply, RollbackStockReply,RollbackPaymentReply )):
-        handle_reply(task)
+    if message_type in (
+            "FindStockReply",
+            "StockSubtractedReply",
+            "PaymentReply",
+            "RollbackStockReply",
+            "RollbackPaymentReply",
+    ):
+        _handle_reply(task)
         return
     else:
-        handle_request(task)
+        _handle_request(task)
         return
 
 
 def _handle_reply(task:dict):
+    app.logger.info(" Received reply message | topic=%s | key=%s", task["request"].get("message"), task["idempotency_key"])
     idempotency_key = task["idempotency_key"]
     task_in_db = _get_task(idempotency_key)
     if task_in_db is None:
-        app.logger.exception("Processing error in order consumer: %s", e)
+        app.logger.exception("Reply for nonexistent task")
     else:
         _update_task(idempotency_key, status="reply_received")
     _send_task(task)
 
 def _handle_request(task:dict):
+    app.logger.info(" Received request message |  key=%s", task["idempotency_key"])
+
     idempotency_key = task["idempotency_key"]
     task_in_db = _get_task(idempotency_key)
     if task_in_db is None:
@@ -185,13 +211,16 @@ def _handle_request(task:dict):
 def _send_ack(task: dict):
     request = task["request"]
     message = Ack(
-        idempotency_key=idem_key
+        idempotency_key=task["idempotency_key"]
     )
-    publish("orchestrator.feedback", request.get("message").order_id, message)
+    app.logger.info(" Sending ack | key=%s",  task["idempotency_key"])
+
+    publish("orchestrator.feedback", request.get("message").get("order_id"), message)
 
 
 def _send_task(task: dict):
     request = task["request"]
+    app.logger.info(" Send message | key=%s", task["idempotency_key"])
     publish(request.get("topic"), request.get("key"), request.get("message"), request.get("partition"))
 
 
@@ -249,7 +278,7 @@ def check_and_retry_pending_messages() -> None:
             app.logger.exception("Retry checker failed: %s", e)
 
 def _handle_failure(task: dict):
-    order_id = task["request"].get("message").order_id
+    order_id = task["request"].get("message").get("order_id")
     message = Failure(
         idempotency_key=task["idempotency_key"],
         order_id=order_id
@@ -1004,11 +1033,17 @@ def recover_on_startup() -> None:
 #     return Response(upstream.content, status=upstream.status_code, headers=response_headers)
 
 
-if __name__ == "__main__":
-    recover_on_startup()
-    start_retry_checker()
-    start_kafka_consumer()
-    gunicorn_logger = logging.getLogger('gunicorn.error')
-    app.logger.handlers = gunicorn_logger.handlers
-    app.logger.setLevel(gunicorn_logger.level)
-    app.run(host="0.0.0.0", port=5000, debug=True)
+if __name__ == '__main__':
+    if os.getenv("DISABLE_KAFKA_CONSUMER") != "1":
+        recover_on_startup()
+        start_retry_checker()
+        start_kafka_consumer()
+    app.run(host="0.0.0.0", port=8000, debug=True)
+else:
+    if os.getenv("DISABLE_KAFKA_CONSUMER") != "1":
+        recover_on_startup()
+        start_retry_checker()
+        start_kafka_consumer()
+        gunicorn_logger = logging.getLogger('gunicorn.error')
+        app.logger.handlers = gunicorn_logger.handlers
+        app.logger.setLevel(gunicorn_logger.level)
