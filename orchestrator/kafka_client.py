@@ -28,31 +28,6 @@ def publish(topic: str, key: str, value: BaseMessage, partition: int | None = No
     logger.info("published %s to %s partition=%s", topic, key, partition)
 
 
-# def publish_raw(topic: str, key: str, payload: dict, partition: int | None = None):
-#     # Used for gateway command/reply envelopes that are plain JSON dicts.
-#     kwargs = {}
-#     if partition is not None:
-#         kwargs["partition"] = partition
-#     producer.produce(
-#         topic,
-#         key=key.encode(),
-#         value=msgspec.json.encode(payload),
-#         **kwargs,
-#     )
-#     producer.flush(2)
-#     logger.info("published raw %s to %s partition=%s", topic, key, partition)
-
-def decode_message(raw_value: bytes) -> BaseMessage:
-    payload = msgspec.json.decode(raw_value, type=dict)
-    message_type = payload.get("type")
-    if not message_type:
-        raise ValueError("Message is missing required 'type' field")
-    message_cls = MESSAGE_TYPES.get(message_type)
-    if message_cls is None:
-        raise ValueError(f"Unknown message type: {message_type}")
-    return msgspec.json.decode(raw_value, type=message_cls)
-
-
 def create_consumer(
     group_id: str,
     topics: list[str],
