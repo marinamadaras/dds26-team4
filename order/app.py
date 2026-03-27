@@ -30,6 +30,9 @@ from messages import (
     RollbackStockReply,
     RollbackPaymentRequest,
     RollbackPaymentReply,
+    Ack,
+    Failure
+
 )
 
 DB_ERROR_STR = "DB error"
@@ -70,7 +73,7 @@ def _submit_kafka_task(topic: str, idempotency_key: str, key: str, message: Base
             "partition" : partition
         }
     }
-
+    app.logger.info("Submitting Kafka task: %s -> %s", topic, idempotency_key)
     # TODO: partitions for orchestrator rout to partition
     publish("orchestrator.requests", idempotency_key, task)
 
@@ -179,6 +182,7 @@ def log_outgoing_message(idempotency_key: str, message_type: str, order_id: str,
 
 def mark_ack_received(idempotency_key: str):
     """Mark that we received an ack for this message"""
+    app.logger.info("Received ACK for: %s", idempotency_key)
     key = f"_outgoing:{idempotency_key}"
     raw = db.get(key)
     if raw:
@@ -221,7 +225,9 @@ def _resend_outgoing_record(record: OutgoingMessageRecord) -> None:
     payload = {f: getattr(message, f) for f in message.__struct_fields__}
     payload["type"] = message_cls.__name__
 
-    _submit_kafka_task(topic=topic, key=key, payload=payload, partition=partition)
+    _submit_kafka_task(topic=topic, idempotency_key= record.idempotency_key,
+                       key=record.order_id, message=message,
+                       partition=_partition_from_order_id(record.order_id))
 
 # for when you have sent  a message but did not receive and answer
 def check_and_retry_pending_messages() -> None:
@@ -424,6 +430,7 @@ def publish_find_stock(order_id: str, item_id: str, quantity: int):
 
     idempotency_key = make_idempotency_key(order_id, "find_stock", item_id, quantity)
     message = FindStock(
+        type = "FindStock",
         idempotency_key=idempotency_key,
         order_id=order_id,
         item_id=item_id,
@@ -441,6 +448,7 @@ def publish_find_stock(order_id: str, item_id: str, quantity: int):
 def publish_subtract_stock(order_id: str, item_id: str, quantity: int):
     idempotency_key = make_idempotency_key(order_id, "subtract_stock", item_id, quantity)
     message = SubtractStock(
+        type="SubtractStock",
         idempotency_key=idempotency_key,
         order_id=order_id,
         item_id=item_id,
@@ -454,13 +462,7 @@ def publish_subtract_stock(order_id: str, item_id: str, quantity: int):
         topic="subtract.stock",
         idempotency_key=idempotency_key,
         key=item_id,
-        message={
-            "type": "SubtractStock",
-            "idempotency_key": idempotency_key,
-            "order_id": order_id,
-            "item_id": item_id,
-            "quantity": int(quantity),
-        },
+        message=message,
         partition=_partition_from_item_id(item_id),
     )
 
@@ -468,6 +470,7 @@ def publish_subtract_stock(order_id: str, item_id: str, quantity: int):
 def publish_payment(order_id: str, user_id: str, amount: int):
     idem_key = make_idempotency_key(order_id, "payment_request", user_id, amount)
     message = PaymentRequest(
+        type = "PaymentRequest",
         idempotency_key=idem_key,
         order_id=order_id,
         user_id=user_id,
@@ -488,6 +491,7 @@ def publish_payment(order_id: str, user_id: str, amount: int):
 def publish_rollback_stock(order_id: str, item_id: str, quantity: int):
     idem_key = make_idempotency_key(order_id, "rollback_stock", item_id, quantity)
     message = RollbackStockRequest(
+        type = "RollbackStockRequest",
         idempotency_key=idem_key,
         order_id=order_id,
         item_id=item_id,
@@ -506,6 +510,7 @@ def publish_rollback_stock(order_id: str, item_id: str, quantity: int):
 def publish_rollback_payment(order_id: str, user_id: str, amount: int):
     idem_key = make_idempotency_key(order_id, "rollback_payment", user_id, amount)
     message = RollbackPaymentRequest(
+        type = "RollbackPaymentRequest",
         idempotency_key=idem_key,
         order_id=order_id,
         user_id=user_id,
@@ -767,6 +772,7 @@ def consumer_loop():
         key = msg.key().decode() if msg.key() else ""
 
         try:
+            app.logger.info("Processing Kafka message: %s topic=%s", key, msg.topic())
             if msg.topic() == "gateway.order.commands":
                 command = msgspec.json.decode(msg.value(), type=dict)
                 handle_http_command(command)

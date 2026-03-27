@@ -1,11 +1,13 @@
 FROM python:3.12-slim
 
-WORKDIR /app
+WORKDIR /home/flask-app
 
+COPY ./requirements.txt .
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install -r requirements.txt
 
-COPY app.py .
+COPY . .
 
-CMD ["gunicorn", "-b", "0.0.0.0:5000", "-w", "1", "--timeout", "30", "app:app"]
+EXPOSE 5000
+
+CMD ["gunicorn", "-b", "0.0.0.0:5000", "app:app"]

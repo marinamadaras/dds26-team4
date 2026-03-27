@@ -144,6 +144,7 @@ def handle_find_stock(message: FindStock, order_id: str):
     item_entry = get_item_from_db_nullable(message.item_id)
     if item_entry is None:
         reply = FindStockReply(
+            type="FindStockReply",
             idempotency_key=message.idempotency_key,
             order_id=order_id,
             item_id=message.item_id,
@@ -152,6 +153,7 @@ def handle_find_stock(message: FindStock, order_id: str):
         )
     else:
         reply = FindStockReply(
+            type="FindStockReply",
             idempotency_key=message.idempotency_key,
             order_id=order_id,
             item_id=message.item_id,
@@ -227,6 +229,7 @@ def handle_subtract_stock(message: SubtractStock):
     cached = get_operation_record(message.idempotency_key)
     if cached is not None and cached.success:
         reply = StockSubtractedReply(
+            type="StockSubtractedReply",
             idempotency_key=message.idempotency_key,
             order_id=message.order_id,
             item_id=message.item_id,
@@ -252,6 +255,7 @@ def handle_subtract_stock(message: SubtractStock):
         pipe.execute()
 
         reply = StockSubtractedReply(
+            type="StockSubtractedReply",
             idempotency_key=message.idempotency_key,
             order_id=message.order_id,
             item_id=message.item_id,
@@ -261,6 +265,7 @@ def handle_subtract_stock(message: SubtractStock):
     except Exception as e:
         store_operation_record(message.idempotency_key, False, str(e))
         reply = StockSubtractedReply(
+            type="StockSubtractedReply",
             idempotency_key=message.idempotency_key,
             order_id=message.order_id,
             item_id=message.item_id,
@@ -282,6 +287,7 @@ def handle_rollback_stock(message: RollbackStockRequest):
     cached = get_operation_record(message.idempotency_key)
     if cached is not None and cached.success:
         reply = RollbackStockReply(
+            type="RollbackStockReply",
             idempotency_key=message.idempotency_key,
             order_id=message.order_id,
             item_id=message.item_id,
@@ -311,6 +317,7 @@ def handle_rollback_stock(message: RollbackStockRequest):
         )
         store_operation_record(message.idempotency_key, True, None)
         reply = RollbackStockReply(
+            type="RollbackStockReply",
             idempotency_key=message.idempotency_key,
             order_id=message.order_id,
             item_id=message.item_id,
@@ -338,6 +345,7 @@ def handle_rollback_stock(message: RollbackStockRequest):
     pipe.execute()
 
     reply = RollbackStockReply(
+        type="RollbackStockReply",
         idempotency_key=message.idempotency_key,
         order_id=message.order_id,
         item_id=message.item_id,

@@ -174,8 +174,8 @@ class Ack(BaseMessage):
     type: str = "Ack"
 
 class Failure(BaseMessage):
-    idempotency_key: str = ""
     order_id: str
+    idempotency_key: str = ""
     type: str = "Failure"
 
 
