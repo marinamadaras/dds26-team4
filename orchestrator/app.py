@@ -21,6 +21,7 @@ TASK_KEY_PREFIX = "task:"
 RETRY_INTERVAL = 5
 RETRY_TIMEOUT = 10
 MAX_RETRIES = 5
+KAFKA_CONSUMER_PARTITION = int(os.getenv("KAFKA_CONSUMER_PARTITION", "0"))
 
 _consumer_thread: threading.Thread | None = None
 
@@ -56,14 +57,16 @@ atexit.register(close_db_connection)
 
 
 def consumer_loop():
-    app.logger.info("Start consumer loop")
+    app.logger.info(
+        "Start consumer loop partition=%s",
+        KAFKA_CONSUMER_PARTITION,
+    )
     consumer = create_consumer(
         group_id="orchestrator-service",
         topics=["orchestrator.requests", "orchestrator.replies"],
         auto_offset_reset="earliest",
         enable_auto_commit=False,
-        # partition=KAFKA_CONSUMER_PARTITION,
-        # group_instance_id=KAFKA_CONSUMER_INSTANCE_ID,
+        partition=KAFKA_CONSUMER_PARTITION,
     )
 
 

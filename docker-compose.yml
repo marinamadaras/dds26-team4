@@ -60,7 +60,7 @@ services:
       kafka-init:
         condition: service_completed_successfully
 
-  orchestrator:
+  orchestrator-0:
     build: ./orchestrator
     image: orchestrator:latest
     restart: unless-stopped
@@ -69,22 +69,72 @@ services:
     environment:
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
 #      - KAFKA_TASKS_TOPIC=orchestrator.tasks
-      - ORCHESTRATOR_CONSUMER_GROUP=orchestrator-service
       - ORDER_SERVICE_URL=http://order-service-0:5000
       - PAYMENT_SERVICE_URL=http://payment-service-0:5000
       - STOCK_SERVICE_URL=http://stock-service-0:5000
       - ORCHESTRATOR_REQUEST_TIMEOUT_SECONDS=5
-      - REDIS_HOST=orchestrator-db
+      - KAFKA_CONSUMER_PARTITION=0
+      - REDIS_HOST=orchestrator-db-0
       - REDIS_PORT=6379
       - REDIS_PASSWORD=redis
       - REDIS_DB=0
     depends_on:
-      - orchestrator-db
+      - orchestrator-db-0
       - order-service-0
       - payment-service-0
       - stock-service-0
 
-  orchestrator-db:
+  orchestrator-1:
+    image: orchestrator:latest
+    restart: unless-stopped
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - ORDER_SERVICE_URL=http://order-service-0:5000
+      - PAYMENT_SERVICE_URL=http://payment-service-0:5000
+      - STOCK_SERVICE_URL=http://stock-service-0:5000
+      - ORCHESTRATOR_REQUEST_TIMEOUT_SECONDS=5
+      - KAFKA_CONSUMER_PARTITION=1
+      - REDIS_HOST=orchestrator-db-1
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=redis
+      - REDIS_DB=0
+    depends_on:
+      - orchestrator-db-1
+      - order-service-1
+      - payment-service-1
+      - stock-service-1
+
+  orchestrator-2:
+    image: orchestrator:latest
+    restart: unless-stopped
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - ORDER_SERVICE_URL=http://order-service-0:5000
+      - PAYMENT_SERVICE_URL=http://payment-service-0:5000
+      - STOCK_SERVICE_URL=http://stock-service-0:5000
+      - ORCHESTRATOR_REQUEST_TIMEOUT_SECONDS=5
+      - KAFKA_CONSUMER_PARTITION=2
+      - REDIS_HOST=orchestrator-db-2
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=redis
+      - REDIS_DB=0
+    depends_on:
+      - orchestrator-db-2
+      - order-service-2
+      - payment-service-2
+      - stock-service-2
+
+  orchestrator-db-0:
+    image: redis:7.2-bookworm
+    restart: unless-stopped
+    command: redis-server --requirepass redis --maxmemory 256mb
+
+  orchestrator-db-1:
+    image: redis:7.2-bookworm
+    restart: unless-stopped
+    command: redis-server --requirepass redis --maxmemory 256mb
+
+  orchestrator-db-2:
     image: redis:7.2-bookworm
     restart: unless-stopped
     command: redis-server --requirepass redis --maxmemory 256mb
@@ -95,7 +145,7 @@ services:
     restart: unless-stopped
     environment:
       - GATEWAY_URL=http://gateway:80
-      - ORCHESTRATOR_URL=http://orchestrator:5000
+      - ORCHESTRATOR_URL=http://orchestrator-0:5000
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
       - KAFKA_CONSUMER_PARTITION=0
       - KAFKA_CONSUMER_INSTANCE_ID=order-service-0
@@ -116,7 +166,7 @@ services:
     restart: unless-stopped
     environment:
       - GATEWAY_URL=http://gateway:80
-      - ORCHESTRATOR_URL=http://orchestrator:5000
+      - ORCHESTRATOR_URL=http://orchestrator-0:5000
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
       - KAFKA_CONSUMER_PARTITION=1
       - KAFKA_CONSUMER_INSTANCE_ID=order-service-1
@@ -137,7 +187,7 @@ services:
     restart: unless-stopped
     environment:
       - GATEWAY_URL=http://gateway:80
-      - ORCHESTRATOR_URL=http://orchestrator:5000
+      - ORCHESTRATOR_URL=http://orchestrator-0:5000
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
       - KAFKA_CONSUMER_PARTITION=2
       - KAFKA_CONSUMER_INSTANCE_ID=order-service-2
@@ -173,7 +223,7 @@ services:
     image: stock:latest
     restart: unless-stopped
     environment:
-      - ORCHESTRATOR_URL=http://orchestrator:5000
+      - ORCHESTRATOR_URL=http://orchestrator-0:5000
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
       - KAFKA_CONSUMER_PARTITION=0
       - KAFKA_CONSUMER_INSTANCE_ID=stock-service-0
@@ -193,7 +243,7 @@ services:
     image: stock:latest
     restart: unless-stopped
     environment:
-      - ORCHESTRATOR_URL=http://orchestrator:5000
+      - ORCHESTRATOR_URL=http://orchestrator-0:5000
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
       - KAFKA_CONSUMER_PARTITION=1
       - KAFKA_CONSUMER_INSTANCE_ID=stock-service-1
@@ -213,7 +263,7 @@ services:
     image: stock:latest
     restart: unless-stopped
     environment:
-      - ORCHESTRATOR_URL=http://orchestrator:5000
+      - ORCHESTRATOR_URL=http://orchestrator-0:5000
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
       - KAFKA_CONSUMER_PARTITION=2
       - KAFKA_CONSUMER_INSTANCE_ID=stock-service-2
@@ -249,7 +299,7 @@ services:
     image: user:latest
     restart: unless-stopped
     environment:
-      - ORCHESTRATOR_URL=http://orchestrator:5000
+      - ORCHESTRATOR_URL=http://orchestrator-0:5000
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
       - KAFKA_CONSUMER_PARTITION=0
       - KAFKA_CONSUMER_INSTANCE_ID=payment-service-0
@@ -269,7 +319,7 @@ services:
     image: user:latest
     restart: unless-stopped
     environment:
-      - ORCHESTRATOR_URL=http://orchestrator:5000
+      - ORCHESTRATOR_URL=http://orchestrator-0:5000
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
       - KAFKA_CONSUMER_PARTITION=1
       - KAFKA_CONSUMER_INSTANCE_ID=payment-service-1
@@ -289,7 +339,7 @@ services:
     image: user:latest
     restart: unless-stopped
     environment:
-      - ORCHESTRATOR_URL=http://orchestrator:5000
+      - ORCHESTRATOR_URL=http://orchestrator-0:5000
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
       - KAFKA_CONSUMER_PARTITION=2
       - KAFKA_CONSUMER_INSTANCE_ID=payment-service-2
@@ -327,7 +377,7 @@ services:
     environment:
       - COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME:-dds26-team4}
       - WATCHDOG_INTERVAL_SECONDS=5
-      - WATCHDOG_SERVICES=order-service-0 order-service-1 order-service-2 stock-service-0 stock-service-1 stock-service-2 payment-service-0 payment-service-1 payment-service-2 order-db-0 order-db-1 order-db-2 stock-db-0 stock-db-1 stock-db-2 payment-db-0 payment-db-1 payment-db-2
+      - WATCHDOG_SERVICES=orchestrator-0 orchestrator-1 orchestrator-2 orchestrator-db-0 orchestrator-db-1 orchestrator-db-2 order-service-0 order-service-1 order-service-2 stock-service-0 stock-service-1 stock-service-2 payment-service-0 payment-service-1 payment-service-2 order-db-0 order-db-1 order-db-2 stock-db-0 stock-db-1 stock-db-2 payment-db-0 payment-db-1 payment-db-2
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./watchdog/watchdog.sh:/watchdog/watchdog.sh:ro
