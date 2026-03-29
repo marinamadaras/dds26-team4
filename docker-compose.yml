@@ -146,6 +146,7 @@ services:
     environment:
       - GATEWAY_URL=http://gateway:80
       - ORCHESTRATOR_URL=http://orchestrator-0:5000
+      - ORCHESTRATOR_PARTITIONS=3
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
       - KAFKA_CONSUMER_PARTITION=0
       - KAFKA_CONSUMER_INSTANCE_ID=order-service-0
@@ -168,6 +169,7 @@ services:
     environment:
       - GATEWAY_URL=http://gateway:80
       - ORCHESTRATOR_URL=http://orchestrator-0:5000
+      - ORCHESTRATOR_PARTITIONS=3
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
       - KAFKA_CONSUMER_PARTITION=1
       - KAFKA_CONSUMER_INSTANCE_ID=order-service-1
@@ -190,6 +192,7 @@ services:
     environment:
       - GATEWAY_URL=http://gateway:80
       - ORCHESTRATOR_URL=http://orchestrator-0:5000
+      - ORCHESTRATOR_PARTITIONS=3
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
       - KAFKA_CONSUMER_PARTITION=2
       - KAFKA_PARTITIONS=3
@@ -227,6 +230,7 @@ services:
     restart: unless-stopped
     environment:
       - ORCHESTRATOR_URL=http://orchestrator-0:5000
+      - ORCHESTRATOR_PARTITIONS=3
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
       - KAFKA_CONSUMER_PARTITION=0
       - KAFKA_CONSUMER_INSTANCE_ID=stock-service-0
@@ -248,6 +252,7 @@ services:
     restart: unless-stopped
     environment:
       - ORCHESTRATOR_URL=http://orchestrator-0:5000
+      - ORCHESTRATOR_PARTITIONS=3
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
       - KAFKA_CONSUMER_PARTITION=1
       - KAFKA_CONSUMER_INSTANCE_ID=stock-service-1
@@ -269,6 +274,7 @@ services:
     restart: unless-stopped
     environment:
       - ORCHESTRATOR_URL=http://orchestrator-0:5000
+      - ORCHESTRATOR_PARTITIONS=3
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
       - KAFKA_CONSUMER_PARTITION=2
       - KAFKA_CONSUMER_INSTANCE_ID=stock-service-2
@@ -306,6 +312,7 @@ services:
     restart: unless-stopped
     environment:
       - ORCHESTRATOR_URL=http://orchestrator-0:5000
+      - ORCHESTRATOR_PARTITIONS=3
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
       - KAFKA_CONSUMER_PARTITION=0
       - KAFKA_CONSUMER_INSTANCE_ID=payment-service-0
@@ -327,6 +334,7 @@ services:
     restart: unless-stopped
     environment:
       - ORCHESTRATOR_URL=http://orchestrator-0:5000
+      - ORCHESTRATOR_PARTITIONS=3
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
       - KAFKA_CONSUMER_PARTITION=1
       - KAFKA_CONSUMER_INSTANCE_ID=payment-service-1
@@ -348,6 +356,7 @@ services:
     restart: unless-stopped
     environment:
       - ORCHESTRATOR_URL=http://orchestrator-0:5000
+      - ORCHESTRATOR_PARTITIONS=3
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
       - KAFKA_CONSUMER_PARTITION=2
       - KAFKA_CONSUMER_INSTANCE_ID=payment-service-2
