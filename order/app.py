@@ -5,6 +5,7 @@ import random
 import re
 import uuid
 import threading
+import zlib
 from collections import defaultdict
 
 import msgspec
@@ -41,6 +42,7 @@ REQ_ERROR_STR = "Requests error"
 GATEWAY_URL = os.environ['GATEWAY_URL']
 KAFKA_CONSUMER_PARTITION = int(os.getenv("KAFKA_CONSUMER_PARTITION", "0"))
 KAFKA_CONSUMER_INSTANCE_ID = os.getenv("KAFKA_CONSUMER_INSTANCE_ID", "order-service-0")
+ORCHESTRATOR_PARTITIONS = int(os.getenv("ORCHESTRATOR_PARTITIONS", "3"))
 
 # All outgoing Kafka messages are routed through the orchestrator.
 ORCHESTRATOR_URL = os.environ.get("ORCHESTRATOR_URL", "http://orchestrator-service:5000")
@@ -74,8 +76,16 @@ def _submit_kafka_task(topic: str, idempotency_key: str, key: str, message: Base
         }
     }
     app.logger.info("Submitting Kafka task: %s -> %s", topic, idempotency_key)
-    # TODO: partitions for orchestrator rout to partition
-    publish("orchestrator.requests", idempotency_key, task)
+    publish(
+        "orchestrator.requests",
+        idempotency_key,
+        task,
+        partition=_orchestrator_partition_for_idempotency_key(idempotency_key),
+    )
+
+
+def _orchestrator_partition_for_idempotency_key(idempotency_key: str) -> int:
+    return zlib.crc32(idempotency_key.encode()) % ORCHESTRATOR_PARTITIONS
 
 
 
