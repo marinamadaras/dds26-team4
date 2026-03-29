@@ -1,6 +1,8 @@
 #!/bin/bash
 set -e
 
+PARTITIONS="${KAFKA_PARTITIONS:-3}"
+
 until /opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server kafka:29092 >/dev/null 2>&1
 do
   echo "Waiting for Kafka..."
@@ -22,7 +24,7 @@ do
       --create \
       --if-not-exists \
       --topic "$topic" \
-      --partitions 3 \
+      --partitions "$PARTITIONS" \
       --replication-factor 1
   ) &
   pids="$pids $!"

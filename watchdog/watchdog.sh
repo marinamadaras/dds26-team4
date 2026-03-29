@@ -5,6 +5,16 @@ set -eu
 PROJECT_NAME="${COMPOSE_PROJECT_NAME:-dds26-team4}"
 INTERVAL_SECONDS="${WATCHDOG_INTERVAL_SECONDS:-2}"
 SERVICES="${WATCHDOG_SERVICES:-order-service-0 order-service-1 order-service-2 stock-service-0 stock-service-1 stock-service-2 payment-service-0 payment-service-1 payment-service-2 order-db-0 order-db-1 order-db-2 stock-db-0 stock-db-1 stock-db-2 payment-db-0 payment-db-1 payment-db-2}"
+PARTITIONS="${WATCHDOG_PARTITIONS:-}"
+
+if [ -n "$PARTITIONS" ]; then
+  SERVICES=""
+  i=0
+  while [ "$i" -lt "$PARTITIONS" ]; do
+    SERVICES="$SERVICES order-service-$i stock-service-$i payment-service-$i order-db-$i stock-db-$i payment-db-$i"
+    i=$((i + 1))
+  done
+fi
 
 find_container_id() {
   docker ps -aq \

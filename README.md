@@ -44,6 +44,24 @@ To switch all services between implementation variants (`2pc` vs `saga`), use a 
 
 Set all three to `app` for Saga mode, or keep `order2pcApp` / `payment2pcApp` / `stock2pcApp` for 2PC mode.
 
+Additional pre-sized compose variants are available for a 96-core host:
+
+- `docker-compose.small.yml`: 1 partition, 1 instance per app/database, 7.5 CPUs total
+- `docker-compose.medium.yml`: 12 partitions, 50 CPUs total, leaves 46 CPUs for Locust
+- `docker-compose.large.yml`: 24 partitions, 90 CPUs total, leaves 6 CPUs for Locust
+
+Example:
+
+```bash
+docker compose -f docker-compose.medium.yml up -d --build
+```
+
+To regenerate these files after changing the topology template, run:
+
+```bash
+python3 scripts/generate_compose_variants.py
+```
+
 ***Requirements:*** You need to have docker and docker-compose installed on your machine. 
 
 K8s is also possible, but we do not require it as part of your submission. 

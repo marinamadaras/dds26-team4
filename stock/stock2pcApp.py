@@ -27,6 +27,7 @@ from messages import (
     StockDecisionRequest,
     StockDecisionReply,
 )
+from span_logger import span
 
 
 DB_ERROR_STR = "DB error"
@@ -214,42 +215,71 @@ def handle_rollback_stock(message: RollbackStockRequest):
 
 
 def handle_prepare_stock_message(message: PrepareStockRequest):
-    success, error = prepare_stock_tx(message.tx_id, message.items)
-    reply = PrepareStockReply(
-        tx_id=message.tx_id,
-        coordinator_partition=message.coordinator_partition,
-        success=success,
-        error=error,
-    )
-    publish(
-        topic="2pc.stock.prepare.replies",
-        key=message.tx_id,
-        value=reply,
-        partition=message.coordinator_partition,
-    )
+    with span(
+        app.logger,
+        "stock",
+        "stock.prepare.handle",
+        trace_id=message.tx_id,
+        item_count=len(message.items),
+    ):
+        success, error = prepare_stock_tx(message.tx_id, message.items)
+        reply = PrepareStockReply(
+            tx_id=message.tx_id,
+            coordinator_partition=message.coordinator_partition,
+            success=success,
+            error=error,
+        )
+        with span(
+            app.logger,
+            "stock",
+            "stock.prepare.reply_publish",
+            trace_id=message.tx_id,
+            success=success,
+        ):
+            publish(
+                topic="2pc.stock.prepare.replies",
+                key=message.tx_id,
+                value=reply,
+                partition=message.coordinator_partition,
+            )
 
 
 def handle_stock_decision_message(message: StockDecisionRequest):
     decision = str(message.decision).upper()
-    if decision == "COMMIT":
-        success, error = commit_stock_tx(message.tx_id)
-    elif decision == "ABORT":
-        success, error = abort_stock_tx(message.tx_id)
-    else:
-        success, error = False, "Unsupported decision"
-    reply = StockDecisionReply(
-        tx_id=message.tx_id,
-        coordinator_partition=message.coordinator_partition,
+    with span(
+        app.logger,
+        "stock",
+        "stock.decision.handle",
+        trace_id=message.tx_id,
         decision=decision,
-        success=success,
-        error=error,
-    )
-    publish(
-        topic="2pc.stock.decision.replies",
-        key=message.tx_id,
-        value=reply,
-        partition=message.coordinator_partition,
-    )
+    ):
+        if decision == "COMMIT":
+            success, error = commit_stock_tx(message.tx_id)
+        elif decision == "ABORT":
+            success, error = abort_stock_tx(message.tx_id)
+        else:
+            success, error = False, "Unsupported decision"
+        reply = StockDecisionReply(
+            tx_id=message.tx_id,
+            coordinator_partition=message.coordinator_partition,
+            decision=decision,
+            success=success,
+            error=error,
+        )
+        with span(
+            app.logger,
+            "stock",
+            "stock.decision.reply_publish",
+            trace_id=message.tx_id,
+            decision=decision,
+            success=success,
+        ):
+            publish(
+                topic="2pc.stock.decision.replies",
+                key=message.tx_id,
+                value=reply,
+                partition=message.coordinator_partition,
+            )
 
 def consumer_loop():
     app.logger.info(

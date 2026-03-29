@@ -24,6 +24,7 @@ from messages import (
     PaymentDecisionRequest,
     PaymentDecisionReply,
 )
+from span_logger import span
 DB_ERROR_STR = "DB error"
 KAFKA_CONSUMER_PARTITION = int(os.getenv("KAFKA_CONSUMER_PARTITION", "0"))
 KAFKA_CONSUMER_INSTANCE_ID = os.getenv("KAFKA_CONSUMER_INSTANCE_ID", "payment-service-0")
@@ -160,42 +161,72 @@ def handle_rollback_payment_request(message: RollbackPaymentRequest):
 
 
 def handle_prepare_payment_message(message: PreparePaymentRequest):
-    success, error = prepare_payment_tx(message.tx_id, message.user_id, int(message.amount))
-    reply = PreparePaymentReply(
-        tx_id=message.tx_id,
-        coordinator_partition=message.coordinator_partition,
-        success=success,
-        error=error,
-    )
-    publish(
-        topic="2pc.payment.prepare.replies",
-        key=message.tx_id,
-        value=reply,
-        partition=message.coordinator_partition,
-    )
+    with span(
+        app.logger,
+        "payment",
+        "payment.prepare.handle",
+        trace_id=message.tx_id,
+        user_id=message.user_id,
+        amount=message.amount,
+    ):
+        success, error = prepare_payment_tx(message.tx_id, message.user_id, int(message.amount))
+        reply = PreparePaymentReply(
+            tx_id=message.tx_id,
+            coordinator_partition=message.coordinator_partition,
+            success=success,
+            error=error,
+        )
+        with span(
+            app.logger,
+            "payment",
+            "payment.prepare.reply_publish",
+            trace_id=message.tx_id,
+            success=success,
+        ):
+            publish(
+                topic="2pc.payment.prepare.replies",
+                key=message.tx_id,
+                value=reply,
+                partition=message.coordinator_partition,
+            )
 
 
 def handle_payment_decision_message(message: PaymentDecisionRequest):
     decision = str(message.decision).upper()
-    if decision == "COMMIT":
-        success, error = commit_payment_tx(message.tx_id)
-    elif decision == "ABORT":
-        success, error = abort_payment_tx(message.tx_id)
-    else:
-        success, error = False, "Unsupported decision"
-    reply = PaymentDecisionReply(
-        tx_id=message.tx_id,
-        coordinator_partition=message.coordinator_partition,
+    with span(
+        app.logger,
+        "payment",
+        "payment.decision.handle",
+        trace_id=message.tx_id,
         decision=decision,
-        success=success,
-        error=error,
-    )
-    publish(
-        topic="2pc.payment.decision.replies",
-        key=message.tx_id,
-        value=reply,
-        partition=message.coordinator_partition,
-    )
+    ):
+        if decision == "COMMIT":
+            success, error = commit_payment_tx(message.tx_id)
+        elif decision == "ABORT":
+            success, error = abort_payment_tx(message.tx_id)
+        else:
+            success, error = False, "Unsupported decision"
+        reply = PaymentDecisionReply(
+            tx_id=message.tx_id,
+            coordinator_partition=message.coordinator_partition,
+            decision=decision,
+            success=success,
+            error=error,
+        )
+        with span(
+            app.logger,
+            "payment",
+            "payment.decision.reply_publish",
+            trace_id=message.tx_id,
+            decision=decision,
+            success=success,
+        ):
+            publish(
+                topic="2pc.payment.decision.replies",
+                key=message.tx_id,
+                value=reply,
+                partition=message.coordinator_partition,
+            )
 
 
 def consumer_loop():

@@ -3,6 +3,7 @@ import os
 import atexit
 import random
 import re
+import time
 import uuid
 import threading
 from collections import defaultdict
@@ -37,11 +38,13 @@ from messages import (
     PaymentDecisionRequest,
     PaymentDecisionReply,
 )
+from span_logger import span, log_span_event
 KAFKA_CONSUMER_INSTANCE_ID = os.getenv("KAFKA_CONSUMER_INSTANCE_ID", "order-service-0")
 KAFKA_CONSUMER_PARTITION = int(os.getenv("KAFKA_CONSUMER_PARTITION", "0"))
 DB_ERROR_STR = "DB error"
 app = Flask("order-service")
 _consumer_thread: threading.Thread | None = None
+_tx_span_state: dict[str, dict[str, float]] = {}
 
 db: redis.Redis = redis.Redis(host=os.environ['REDIS_HOST'],
                               port=int(os.environ['REDIS_PORT']),
@@ -277,31 +280,55 @@ def handle_http_command(command: dict):
         return
 
     url = f"http://127.0.0.1:5000/{action}"
-    try:
-        if method == "POST":
-            response = requests.post(url, timeout=10)
-        else:
-            response = requests.get(url, timeout=10)
-        content_type = response.headers.get("Content-Type", "")
-        if "application/json" in content_type:
-            body = response.json()
-        else:
-            body = response.text
-        status_code = response.status_code
-    except Exception as e:
-        status_code = 500
-        body = {"error": str(e)}
-
-    publish_raw(
-        topic="gateway.order.replies",
-        key=request_id,
-        payload={
-            "request_id": request_id,
-            "status_code": status_code,
-            "body": body,
-        },
+    with span(
+        app.logger,
+        "order",
+        "order.gateway_command.total",
+        trace_id=request_id,
+        action=action,
+        method=method,
         partition=KAFKA_CONSUMER_PARTITION,
-    )
+    ):
+        try:
+            with span(
+                app.logger,
+                "order",
+                "order.gateway_command.local_http",
+                trace_id=request_id,
+                action=action,
+                method=method,
+            ):
+                if method == "POST":
+                    response = requests.post(url, timeout=10)
+                else:
+                    response = requests.get(url, timeout=10)
+                content_type = response.headers.get("Content-Type", "")
+                if "application/json" in content_type:
+                    body = response.json()
+                else:
+                    body = response.text
+                status_code = response.status_code
+        except Exception as e:
+            status_code = 500
+            body = {"error": str(e)}
+
+        with span(
+            app.logger,
+            "order",
+            "order.gateway_command.reply_publish",
+            trace_id=request_id,
+            status_code=status_code,
+        ):
+            publish_raw(
+                topic="gateway.order.replies",
+                key=request_id,
+                payload={
+                    "request_id": request_id,
+                    "status_code": status_code,
+                    "body": body,
+                },
+                partition=KAFKA_CONSUMER_PARTITION,
+            )
 
 
 def _is_prepare_phase_complete(tx: "CheckoutTransaction") -> bool:
@@ -335,12 +362,32 @@ def _set_decision_reply(tx: "CheckoutTransaction", source: str, success: bool, e
 def _maybe_decide_and_broadcast(tx_id: str, tx: "CheckoutTransaction"):
     if tx.state != "PREPARING" or not _is_prepare_phase_complete(tx):
         return
+    started = _tx_span_state.setdefault(tx_id, {})
+    prepare_started_at = started.get("prepare_started_at")
+    if prepare_started_at is not None:
+        log_span_event(
+            app.logger,
+            "order",
+            "order.checkout.prepare_phase.complete",
+            trace_id=tx_id,
+            order_id=tx.order_id,
+            duration_ms=round((time.perf_counter() - prepare_started_at) * 1000, 3),
+        )
     prepare_success = bool(tx.stock_prepare_success) and bool(tx.payment_prepare_success)
     tx.decision = "COMMIT" if prepare_success else "ABORT"
     tx.state = "DECIDED"
     set_tx(tx_id, tx)
-    publish_stock_decision(tx_id, tx.decision, tx.items)
-    publish_payment_decision(tx_id, tx.decision, tx.user_id)
+    started["decision_started_at"] = time.perf_counter()
+    with span(
+        app.logger,
+        "order",
+        "order.checkout.decision_publish",
+        trace_id=tx_id,
+        order_id=tx.order_id,
+        decision=tx.decision,
+    ):
+        publish_stock_decision(tx_id, tx.decision, tx.items)
+        publish_payment_decision(tx_id, tx.decision, tx.user_id)
 
 
 def _maybe_complete(tx_id: str, tx: "CheckoutTransaction"):
@@ -353,48 +400,101 @@ def _maybe_complete(tx_id: str, tx: "CheckoutTransaction"):
     tx.state = "COMPLETED"
     set_tx(tx_id, tx)
     release_checkout_lock(tx.order_id)
+    started = _tx_span_state.pop(tx_id, {})
+    decision_started_at = started.get("decision_started_at")
+    if decision_started_at is not None:
+        log_span_event(
+            app.logger,
+            "order",
+            "order.checkout.decision_phase.complete",
+            trace_id=tx_id,
+            order_id=tx.order_id,
+            decision=tx.decision,
+            duration_ms=round((time.perf_counter() - decision_started_at) * 1000, 3),
+        )
+    total_started_at = started.get("total_started_at")
+    if total_started_at is not None:
+        log_span_event(
+            app.logger,
+            "order",
+            "order.checkout.tx.complete",
+            trace_id=tx_id,
+            order_id=tx.order_id,
+            decision=tx.decision,
+            duration_ms=round((time.perf_counter() - total_started_at) * 1000, 3),
+        )
 
 
 def handle_prepare_stock_reply(message: PrepareStockReply):
-    tx = get_tx_from_db(message.tx_id)
-    if tx is None or tx.state != "PREPARING":
-        return
-    _set_prepare_reply(tx, "stock", message.success, message.error)
-    set_tx(message.tx_id, tx)
-    _maybe_decide_and_broadcast(message.tx_id, tx)
+    with span(
+        app.logger,
+        "order",
+        "order.checkout.prepare_stock_reply.handle",
+        trace_id=message.tx_id,
+        success=message.success,
+    ):
+        tx = get_tx_from_db(message.tx_id)
+        if tx is None or tx.state != "PREPARING":
+            return
+        _set_prepare_reply(tx, "stock", message.success, message.error)
+        set_tx(message.tx_id, tx)
+        _maybe_decide_and_broadcast(message.tx_id, tx)
 
 
 def handle_prepare_payment_reply(message: PreparePaymentReply):
-    tx = get_tx_from_db(message.tx_id)
-    if tx is None or tx.state != "PREPARING":
-        return
-    _set_prepare_reply(tx, "payment", message.success, message.error)
-    set_tx(message.tx_id, tx)
-    _maybe_decide_and_broadcast(message.tx_id, tx)
+    with span(
+        app.logger,
+        "order",
+        "order.checkout.prepare_payment_reply.handle",
+        trace_id=message.tx_id,
+        success=message.success,
+    ):
+        tx = get_tx_from_db(message.tx_id)
+        if tx is None or tx.state != "PREPARING":
+            return
+        _set_prepare_reply(tx, "payment", message.success, message.error)
+        set_tx(message.tx_id, tx)
+        _maybe_decide_and_broadcast(message.tx_id, tx)
 
 
 def handle_stock_decision_reply(message: StockDecisionReply):
-    tx = get_tx_from_db(message.tx_id)
-    if tx is None or tx.state != "DECIDED":
-        return
-    _set_decision_reply(tx, "stock", message.success, message.error)
-    set_tx(message.tx_id, tx)
-    if not message.success:
-        publish_stock_decision(message.tx_id, tx.decision, tx.items)
-        return
-    _maybe_complete(message.tx_id, tx)
+    with span(
+        app.logger,
+        "order",
+        "order.checkout.stock_decision_reply.handle",
+        trace_id=message.tx_id,
+        decision=message.decision,
+        success=message.success,
+    ):
+        tx = get_tx_from_db(message.tx_id)
+        if tx is None or tx.state != "DECIDED":
+            return
+        _set_decision_reply(tx, "stock", message.success, message.error)
+        set_tx(message.tx_id, tx)
+        if not message.success:
+            publish_stock_decision(message.tx_id, tx.decision, tx.items)
+            return
+        _maybe_complete(message.tx_id, tx)
 
 
 def handle_payment_decision_reply(message: PaymentDecisionReply):
-    tx = get_tx_from_db(message.tx_id)
-    if tx is None or tx.state != "DECIDED":
-        return
-    _set_decision_reply(tx, "payment", message.success, message.error)
-    set_tx(message.tx_id, tx)
-    if not message.success:
-        publish_payment_decision(message.tx_id, tx.decision, tx.user_id)
-        return
-    _maybe_complete(message.tx_id, tx)
+    with span(
+        app.logger,
+        "order",
+        "order.checkout.payment_decision_reply.handle",
+        trace_id=message.tx_id,
+        decision=message.decision,
+        success=message.success,
+    ):
+        tx = get_tx_from_db(message.tx_id)
+        if tx is None or tx.state != "DECIDED":
+            return
+        _set_decision_reply(tx, "payment", message.success, message.error)
+        set_tx(message.tx_id, tx)
+        if not message.success:
+            publish_payment_decision(message.tx_id, tx.decision, tx.user_id)
+            return
+        _maybe_complete(message.tx_id, tx)
 
 
 def handle_checkout_requested(message: CheckoutRequested):
@@ -645,43 +745,61 @@ def recover_in_doubt_transactions():
 
 
 def process_checkout_async(order_id: str):
-    if not try_acquire_checkout_lock(order_id):
-        app.logger.info("checkout already in progress for order=%s", order_id)
-        return
-    order_entry = get_order_if_exists(order_id)
-    if order_entry is None:
-        app.logger.warning("async checkout ignored: order %s not found", order_id)
-        release_checkout_lock(order_id)
-        return
-    if order_entry.paid:
-        app.logger.info("async checkout skipped: order %s already paid", order_id)
-        release_checkout_lock(order_id)
-        return
-
     tx_id = str(uuid.uuid4())
-    items = aggregate_items(order_entry.items)
-    tx = CheckoutTransaction(
-        state="PREPARING",
-        decision="UNKNOWN",
+    with span(
+        app.logger,
+        "order",
+        "order.checkout.async.total",
+        trace_id=tx_id,
         order_id=order_id,
-        user_id=order_entry.user_id,
-        total_cost=order_entry.total_cost,
-        items=items,
-    )
-    set_tx(tx_id, tx)
+    ):
+        if not try_acquire_checkout_lock(order_id):
+            app.logger.info("checkout already in progress for order=%s", order_id)
+            return
+        order_entry = get_order_if_exists(order_id)
+        if order_entry is None:
+            app.logger.warning("async checkout ignored: order %s not found", order_id)
+            release_checkout_lock(order_id)
+            return
+        if order_entry.paid:
+            app.logger.info("async checkout skipped: order %s already paid", order_id)
+            release_checkout_lock(order_id)
+            return
 
-    try:
-        publish_prepare_stock(tx_id, items)
-        publish_prepare_payment(tx_id, order_entry.user_id, order_entry.total_cost)
-    except ValueError as exc:
-        tx.decision = "ABORT"
-        tx.state = "COMPLETED"
-        tx.last_error = str(exc)
+        items = aggregate_items(order_entry.items)
+        tx = CheckoutTransaction(
+            state="PREPARING",
+            decision="UNKNOWN",
+            order_id=order_id,
+            user_id=order_entry.user_id,
+            total_cost=order_entry.total_cost,
+            items=items,
+        )
         set_tx(tx_id, tx)
-        release_checkout_lock(order_id)
-        app.logger.warning("async checkout aborted order=%s tx=%s error=%s", order_id, tx_id, exc)
-        return
-    app.logger.info("async checkout started order=%s tx=%s", order_id, tx_id)
+        _tx_span_state[tx_id] = {"total_started_at": time.perf_counter()}
+
+        try:
+            _tx_span_state[tx_id]["prepare_started_at"] = time.perf_counter()
+            with span(
+                app.logger,
+                "order",
+                "order.checkout.prepare_publish",
+                trace_id=tx_id,
+                order_id=order_id,
+                item_count=len(items),
+            ):
+                publish_prepare_stock(tx_id, items)
+                publish_prepare_payment(tx_id, order_entry.user_id, order_entry.total_cost)
+        except ValueError as exc:
+            tx.decision = "ABORT"
+            tx.state = "COMPLETED"
+            tx.last_error = str(exc)
+            set_tx(tx_id, tx)
+            release_checkout_lock(order_id)
+            app.logger.warning("async checkout aborted order=%s tx=%s error=%s", order_id, tx_id, exc)
+            _tx_span_state.pop(tx_id, None)
+            return
+        app.logger.info("async checkout started order=%s tx=%s", order_id, tx_id)
 
 
 @app.post('/create/<user_id>')
@@ -748,19 +866,33 @@ def add_item(order_id: str, item_id: str, quantity: int):
 
 @app.post('/checkout/<order_id>')
 def checkout(order_id: str):
-    app.logger.debug(f"Queueing checkout for {order_id}")
-    order_entry: OrderValue = get_order_from_db(order_id)
-    if order_entry.paid:
-        return Response("Order already paid", status=200)
-    if is_checkout_in_progress(order_id):
-        return Response("Checkout already in progress", status=202)
+    with span(
+        app.logger,
+        "order",
+        "order.checkout.http",
+        trace_id=order_id,
+        order_id=order_id,
+    ):
+        app.logger.debug(f"Queueing checkout for {order_id}")
+        order_entry: OrderValue = get_order_from_db(order_id)
+        if order_entry.paid:
+            return Response("Order already paid", status=200)
+        if is_checkout_in_progress(order_id):
+            return Response("Checkout already in progress", status=202)
 
-    try:
-        publish_checkout_requested(order_id)
-    except Exception:
-        abort(503, "Failed to enqueue checkout")
+        try:
+            with span(
+                app.logger,
+                "order",
+                "order.checkout.enqueue",
+                trace_id=order_id,
+                order_id=order_id,
+            ):
+                publish_checkout_requested(order_id)
+        except Exception:
+            abort(503, "Failed to enqueue checkout")
 
-    return Response("Checkout queued", status=202)
+        return Response("Checkout queued", status=202)
 
 
 recover_in_doubt_transactions()

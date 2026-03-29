@@ -7,6 +7,7 @@ import zlib
 import msgspec
 from confluent_kafka import Consumer, Producer, TopicPartition, OFFSET_END
 from flask import Flask, jsonify, Response, request
+from span_logger import span
 
 BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:29092")
 PARTITIONS = int(os.getenv("KAFKA_PARTITIONS", "3"))
@@ -97,6 +98,15 @@ def _reply_consumer_loop(partition: int):
             if msg.partition() != pending["partition"]:
                 continue
 
+            with span(
+                app.logger,
+                "api-gateway",
+                "gateway.reply.matched",
+                trace_id=request_id,
+                partition=partition,
+                reply_topic=msg.topic(),
+            ):
+                pass
             pending["response"] = (
                 int(data.get("status_code", 500)),
                 data.get("body", ""),
@@ -138,33 +148,104 @@ def _send_command(
         "method": method,
         "action": action,
     }
-    if not _reply_consumer_ready[partition].wait(timeout=5):
-        return 503, {"error": "Gateway reply consumer not ready"}
-
-    pending = {
-        "event": threading.Event(),
-        "response": None,
-        "reply_topic": reply_topic,
-        "partition": partition,
-    }
-    with _pending_lock:
-        _pending_requests[request_id] = pending
-
-    try:
-        producer.produce(
-            command_topic,
-            key=key.encode(),
-            value=msgspec.json.encode(payload),
+    with span(
+        app.logger,
+        "api-gateway",
+        "gateway.command.total",
+        trace_id=request_id,
+        command_topic=command_topic,
+        reply_topic=reply_topic,
+        action=action,
+        method=method,
+        partition=partition,
+    ):
+        with span(
+            app.logger,
+            "api-gateway",
+            "gateway.reply_consumer.wait_ready",
+            trace_id=request_id,
             partition=partition,
-        )
-        producer.flush(2)
+        ):
+            if not _reply_consumer_ready[partition].wait(timeout=5):
+                return 503, {"error": "Gateway reply consumer not ready"}
 
-        if not pending["event"].wait(timeout=REQUEST_TIMEOUT_SECONDS):
-            return 504, {"error": "Gateway timeout waiting for service reply"}
-        return pending["response"]
-    finally:
+        pending = {
+            "event": threading.Event(),
+            "response": None,
+            "reply_topic": reply_topic,
+            "partition": partition,
+        }
         with _pending_lock:
-            _pending_requests.pop(request_id, None)
+            _pending_requests[request_id] = pending
+
+        try:
+            with span(
+                app.logger,
+                "api-gateway",
+                "gateway.command.publish",
+                trace_id=request_id,
+                command_topic=command_topic,
+                partition=partition,
+            ):
+                producer.produce(
+                    command_topic,
+                    key=key.encode(),
+                    value=msgspec.json.encode(payload),
+                    partition=partition,
+                )
+                producer.flush(2)
+
+            with span(
+                app.logger,
+                "api-gateway",
+                "gateway.reply.wait",
+                trace_id=request_id,
+                reply_topic=reply_topic,
+                partition=partition,
+                timeout_seconds=REQUEST_TIMEOUT_SECONDS,
+            ):
+                if not pending["event"].wait(timeout=REQUEST_TIMEOUT_SECONDS):
+                    return 504, {"error": "Gateway timeout waiting for service reply"}
+            return pending["response"]
+        finally:
+            with _pending_lock:
+                _pending_requests.pop(request_id, None)
+
+
+def _broadcast_command(
+    command_topic: str,
+    reply_topic: str,
+    method: str,
+    action: str,
+):
+    results = []
+    for partition in range(PARTITIONS):
+        status, body = _send_command(
+            command_topic=command_topic,
+            reply_topic=reply_topic,
+            key=f"{action}:{partition}",
+            partition=partition,
+            method=method,
+            action=action,
+        )
+        results.append(
+            {
+                "partition": partition,
+                "status_code": status,
+                "body": body,
+            }
+        )
+
+    failures = [result for result in results if result["status_code"] >= 400]
+    if failures:
+        return 502, {
+            "error": "Batch init failed on one or more partitions",
+            "results": results,
+        }
+    return 200, {
+        "msg": "Batch init successful",
+        "results": results,
+    }
 
 
 def _to_response(status_code: int, body: object):
@@ -233,6 +314,17 @@ def order_checkout(order_id: str):
     return _to_response(status, body)
 
 
+@app.post("/orders/batch_init/<n>/<n_items>/<n_users>/<item_price>")
+def order_batch_init(n: int, n_items: int, n_users: int, item_price: int):
+    status, body = _broadcast_command(
+        command_topic="gateway.order.commands",
+        reply_topic="gateway.order.replies",
+        method="POST",
+        action=f"batch_init/{n}/{n_items}/{n_users}/{item_price}",
+    )
+    return _to_response(status, body)
+
+
 @app.post("/stock/item/create/<price>")
 @app.post("/item/create/<price>")
 def stock_create(price: int):
@@ -244,6 +336,17 @@ def stock_create(price: int):
         partition=partition,
         method="POST",
         action=f"item/create/{price}",
+    )
+    return _to_response(status, body)
+
+
+@app.post("/stock/batch_init/<n>/<starting_stock>/<item_price>")
+def stock_batch_init(n: int, starting_stock: int, item_price: int):
+    status, body = _broadcast_command(
+        command_topic="gateway.stock.commands",
+        reply_topic="gateway.stock.replies",
+        method="POST",
+        action=f"batch_init/{n}/{starting_stock}/{item_price}",
     )
     return _to_response(status, body)
 
@@ -289,6 +392,17 @@ def stock_subtract(item_id: str, amount: int):
         partition=partition,
         method="POST",
         action=f"subtract/{item_id}/{amount}",
+    )
+    return _to_response(status, body)
+
+
+@app.post("/payment/batch_init/<n>/<starting_money>")
+def payment_batch_init(n: int, starting_money: int):
+    status, body = _broadcast_command(
+        command_topic="gateway.payment.commands",
+        reply_topic="gateway.payment.replies",
+        method="POST",
+        action=f"batch_init/{n}/{starting_money}",
     )
     return _to_response(status, body)
 
