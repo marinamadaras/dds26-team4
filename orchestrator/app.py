@@ -176,12 +176,21 @@ def _handle_request(task:dict):
 
 def _send_ack(task: dict):
     request = task["request"]
+    msg = request.get("message")
+    order_id = msg.get("order_id")
+    tx_id = msg.get("tx_id")
+
+    key = order_id or tx_id
+
+    if key is None:
+        app.logger.error("ACK: No key found in message: %s", msg)
+        return
     message = Ack(
         idempotency_key=task["idempotency_key"]
     )
-    app.logger.info(" Sending ack | key=%s",  task["idempotency_key"])
+    app.logger.info(" Sending ack | key=%s", key)
 
-    publish("orchestrator.feedback", request.get("message").get("order_id"), message)
+    publish("orchestrator.feedback", key, message)
 
 
 def _send_task(task: dict):

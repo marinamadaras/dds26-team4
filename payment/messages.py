@@ -46,6 +46,7 @@ class PreparePaymentRequest(BaseMessage):
     coordinator_partition: int
     user_id: str
     amount: int
+    idempotency_key: str = ""
     type: str = "PreparePaymentRequest"
 
 
@@ -53,6 +54,7 @@ class PreparePaymentReply(BaseMessage):
     tx_id: str
     coordinator_partition: int
     success: bool
+    idempotency_key: str = ""
     error: str | None = None
     type: str = "PreparePaymentReply"
 
@@ -61,6 +63,7 @@ class PaymentDecisionRequest(BaseMessage):
     tx_id: str
     coordinator_partition: int
     decision: str
+    idempotency_key: str = ""
     type: str = "PaymentDecisionRequest"
 
 
@@ -69,6 +72,7 @@ class PaymentDecisionReply(BaseMessage):
     coordinator_partition: int
     decision: str
     success: bool
+    idempotency_key: str = ""
     error: str | None = None
     type: str = "PaymentDecisionReply"
 

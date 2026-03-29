@@ -120,9 +120,9 @@ def _submit_kafka_task(topic: str, idempotency_key: str, key: str, message: Base
     publish("orchestrator.requests", idempotency_key, task)
 
 def publish_find_stock(order_id: str, item_id: str, quantity: int):
-    message = FindStock(order_id=order_id, item_id=item_id, quantity=int(quantity))
+    idempotency_key = make_idempotency_key(order_id, "find_stock", item_id, quantity)
+    message = FindStock(order_id=order_id, item_id=item_id, quantity=int(quantity), idempotency_key = idempotency_key)
 
-    idempotency_key = make_idempotency_key(order_id,"find_stock", item_id, quantity)
     _submit_kafka_task(
         topic="find.stock",
         idempotency_key = idempotency_key,
@@ -133,9 +133,10 @@ def publish_find_stock(order_id: str, item_id: str, quantity: int):
 
 
 def publish_subtract_stock(order_id: str, item_id: str, quantity: int):
-    message = SubtractStock(order_id=order_id, item_id=item_id, quantity=int(quantity))
-
     idempotency_key = make_idempotency_key(order_id, "subtract_stock", item_id, quantity)
+
+    message = SubtractStock(order_id=order_id, item_id=item_id, quantity=int(quantity), idempotency_key=idempotency_key)
+
     _submit_kafka_task(
         topic="subtract.stock",
         idempotency_key=idempotency_key,
@@ -146,9 +147,10 @@ def publish_subtract_stock(order_id: str, item_id: str, quantity: int):
 
 
 def publish_payment(order_id: str, user_id: str, amount: int):
-    message = PaymentRequest(order_id=order_id, user_id=user_id, amount=int(amount))
-
     idempotency_key = make_idempotency_key(order_id, "payment", user_id, amount)
+
+    message = PaymentRequest(order_id=order_id, user_id=user_id, amount=int(amount), idempotency_key=idempotency_key)
+
     _submit_kafka_task(
         topic="payment",
         idempotency_key=idempotency_key,
@@ -159,9 +161,10 @@ def publish_payment(order_id: str, user_id: str, amount: int):
 
 
 def publish_rollback_stock(order_id: str, item_id: str, quantity: int):
-    message = RollbackStockRequest(order_id=order_id, item_id=item_id, quantity=int(quantity))
-
     idempotency_key = make_idempotency_key(order_id, "rollback_stock", item_id, quantity)
+
+    message = RollbackStockRequest(order_id=order_id, item_id=item_id, quantity=int(quantity), idempotency_key=idempotency_key)
+
     _submit_kafka_task(
         topic="rollback.stock",
         idempotency_key=idempotency_key,
@@ -172,9 +175,10 @@ def publish_rollback_stock(order_id: str, item_id: str, quantity: int):
 
 
 def publish_rollback_payment(order_id: str, user_id: str, amount: int):
-    message = RollbackPaymentRequest(order_id=order_id, user_id=user_id, amount=int(amount))
-
     idempotency_key = make_idempotency_key(order_id, "rollback_payment", user_id, amount)
+
+    message = RollbackPaymentRequest(order_id=order_id, user_id=user_id, amount=int(amount), idempotency_key=idempotency_key)
+
     _submit_kafka_task(
         topic="rollback.payment",
         idempotency_key=idempotency_key,
@@ -185,7 +189,9 @@ def publish_rollback_payment(order_id: str, user_id: str, amount: int):
 
 
 def publish_checkout_requested(order_id: str):
-    message = CheckoutRequested(order_id=order_id)
+    idempotency_key = make_idempotency_key(order_id, "checkout_requested")
+
+    message = CheckoutRequested(order_id=order_id, idempotency_key=idempotency_key)
     # publish(
     #     topic="checkout.requested",
     #     key=order_id,
@@ -193,7 +199,6 @@ def publish_checkout_requested(order_id: str):
     #     partition=_partition_from_order_id(order_id),
     # )
 
-    idempotency_key = make_idempotency_key(order_id, "checkout_requested")
     _submit_kafka_task(
         topic="checkout.requested",
         idempotency_key=idempotency_key,
@@ -204,19 +209,15 @@ def publish_checkout_requested(order_id: str):
 
 
 def publish_prepare_stock(tx_id: str, items: list[tuple[str, int]]):
+    idempotency_key = make_idempotency_key(tx_id, "2pc_stock_prepare")
+
     message = PrepareStockRequest(
         tx_id=tx_id,
         coordinator_partition=KAFKA_CONSUMER_PARTITION,
         items=items,
-    )
-    publish(
-        topic="2pc.stock.prepare",
-        key=tx_id,
-        value=message,
-        partition=_stock_participant_partition(items),
+        idempotency_key = idempotency_key
     )
 
-    idempotency_key = make_idempotency_key(tx_id, "2pc_stock_prepare")
     _submit_kafka_task(
         topic="2pc.stock.prepare",
         idempotency_key=idempotency_key,
@@ -228,14 +229,16 @@ def publish_prepare_stock(tx_id: str, items: list[tuple[str, int]]):
 
 
 def publish_prepare_payment(tx_id: str, user_id: str, amount: int):
+    idempotency_key = make_idempotency_key(tx_id, "2pc_payment_prepare")
+
     message = PreparePaymentRequest(
         tx_id=tx_id,
         coordinator_partition=KAFKA_CONSUMER_PARTITION,
         user_id=user_id,
         amount=int(amount),
+        idempotency_key=idempotency_key
     )
 
-    idempotency_key = make_idempotency_key(tx_id, "2pc_payment_prepare")
     _submit_kafka_task(
         topic="2pc.payment.prepare",
         idempotency_key=idempotency_key,
@@ -246,14 +249,16 @@ def publish_prepare_payment(tx_id: str, user_id: str, amount: int):
 
 
 def publish_stock_decision(tx_id: str, decision: str, items: list[tuple[str, int]]):
+    idempotency_key = make_idempotency_key(tx_id, "2pc_stock_decision")
+
     message = StockDecisionRequest(
         tx_id=tx_id,
         coordinator_partition=KAFKA_CONSUMER_PARTITION,
         decision=decision,
+        idempotency_key=idempotency_key
     )
 
 
-    idempotency_key = make_idempotency_key(tx_id, "2pc_stock_decision")
     _submit_kafka_task(
         topic="2pc.stock.decision",
         idempotency_key=idempotency_key,
@@ -264,13 +269,15 @@ def publish_stock_decision(tx_id: str, decision: str, items: list[tuple[str, int
 
 
 def publish_payment_decision(tx_id: str, decision: str, user_id: str):
+    idempotency_key = make_idempotency_key(tx_id, "2pc_payment_decision")
+
     message = PaymentDecisionRequest(
         tx_id=tx_id,
         coordinator_partition=KAFKA_CONSUMER_PARTITION,
         decision=decision,
+        idempotency_key=idempotency_key
     )
 
-    idempotency_key = make_idempotency_key(tx_id, "2pc_payment_decision")
     _submit_kafka_task(
         topic="2pc.payment.decision",
         idempotency_key=idempotency_key,

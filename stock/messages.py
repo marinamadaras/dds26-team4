@@ -67,6 +67,7 @@ class PrepareStockRequest(BaseMessage):
     coordinator_partition: int
     items: list[tuple[str, int]]
     type: str = "PrepareStockRequest"
+    idempotency_key: str = ""
 
 
 class PrepareStockReply(BaseMessage):
@@ -75,6 +76,7 @@ class PrepareStockReply(BaseMessage):
     success: bool
     error: str | None = None
     type: str = "PrepareStockReply"
+    idempotency_key: str = ""
 
 
 class StockDecisionRequest(BaseMessage):
@@ -82,6 +84,7 @@ class StockDecisionRequest(BaseMessage):
     coordinator_partition: int
     decision: str
     type: str = "StockDecisionRequest"
+    idempotency_key: str = ""
 
 
 class StockDecisionReply(BaseMessage):
@@ -91,6 +94,7 @@ class StockDecisionReply(BaseMessage):
     success: bool
     error: str | None = None
     type: str = "StockDecisionReply"
+    idempotency_key: str = ""
 
 
 MESSAGE_TYPES: dict[str, type[BaseMessage]] = {
