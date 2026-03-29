@@ -66,6 +66,23 @@ class PaymentTransaction(Struct):
     amount: int
 
 
+def _submit_kafka_task(topic: str, idempotency_key: str, key: str, message: BaseMessage, partition: int) -> None:
+    app.logger.info(" Send message | key=%s", "idempotency_key")
+    task = {
+        "idempotency_key": idempotency_key, # used as id for the task
+
+        # actual request
+        "request": {
+            "topic": topic, # to which service we route the request
+            "key": key, # the key for that service
+            "message": message, # the actual message we send
+            "partition" : partition
+        }
+    }
+
+    # TODO: partitions for orchestrator rout to partition
+    publish("orchestrator.replies", idempotency_key, task)
+
 def get_user_from_db(user_id: str) -> UserValue | None:
     try:
         # get serialized data
@@ -118,10 +135,12 @@ def handle_payment_request(message: PaymentRequest):
             success=False,
             error=str(e),
         )
-    publish(
+
+    _submit_kafka_task(
         topic="payment.replies",
+        idempotency_key=message.idempotency_key,
         key=message.order_id,
-        value=reply,
+        message=reply,
         partition=_partition_from_order_id(message.order_id),
     )
 
@@ -151,10 +170,13 @@ def handle_rollback_payment_request(message: RollbackPaymentRequest):
         success=False,
         error="rollback payment not implemented",
     )
-    publish(
+
+
+    _submit_kafka_task(
         topic="rollback.payment.replies",
+        idempotency_key=message.idempotency_key,
         key=message.order_id,
-        value=reply,
+        message=reply,
         partition=_partition_from_order_id(message.order_id),
     )
 
@@ -167,11 +189,14 @@ def handle_prepare_payment_message(message: PreparePaymentRequest):
         success=success,
         error=error,
     )
-    publish(
+
+
+    _submit_kafka_task(
         topic="2pc.payment.prepare.replies",
+        idempotency_key=message.idempotency_key,
         key=message.tx_id,
-        value=reply,
-        partition=message.coordinator_partition,
+        message=reply,
+        partition=message.coordinator_partition
     )
 
 
@@ -190,10 +215,12 @@ def handle_payment_decision_message(message: PaymentDecisionRequest):
         success=success,
         error=error,
     )
-    publish(
+
+    _submit_kafka_task(
         topic="2pc.payment.decision.replies",
+        idempotency_key=message.idempotency_key,
         key=message.tx_id,
-        value=reply,
+        message=reply,
         partition=message.coordinator_partition,
     )
 
