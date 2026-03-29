@@ -67,6 +67,23 @@ class PaymentTransaction(Struct):
     amount: int
 
 
+def _submit_kafka_task(topic: str, idempotency_key: str, key: str, message: BaseMessage, partition: int) -> None:
+    app.logger.info(" Send message | key=%s", "idempotency_key")
+    task = {
+        "idempotency_key": idempotency_key, # used as id for the task
+
+        # actual request
+        "request": {
+            "topic": topic, # to which service we route the request
+            "key": key, # the key for that service
+            "message": message, # the actual message we send
+            "partition" : partition
+        }
+    }
+
+    # TODO: partitions for orchestrator rout to partition
+    publish("orchestrator.replies", idempotency_key, task)
+
 def get_user_from_db(user_id: str) -> UserValue | None:
     try:
         # get serialized data
@@ -119,10 +136,12 @@ def handle_payment_request(message: PaymentRequest):
             success=False,
             error=str(e),
         )
-    publish(
+
+    _submit_kafka_task(
         topic="payment.replies",
+        idempotency_key=message.idempotency_key,
         key=message.order_id,
-        value=reply,
+        message=reply,
         partition=_partition_from_order_id(message.order_id),
     )
 
@@ -152,22 +171,25 @@ def handle_rollback_payment_request(message: RollbackPaymentRequest):
         success=False,
         error="rollback payment not implemented",
     )
-    publish(
+
+
+    _submit_kafka_task(
         topic="rollback.payment.replies",
+        idempotency_key=message.idempotency_key,
         key=message.order_id,
-        value=reply,
+        message=reply,
         partition=_partition_from_order_id(message.order_id),
     )
 
 
 def handle_prepare_payment_message(message: PreparePaymentRequest):
     with span(
-        app.logger,
-        "payment",
-        "payment.prepare.handle",
-        trace_id=message.tx_id,
-        user_id=message.user_id,
-        amount=message.amount,
+            app.logger,
+            "payment",
+            "payment.prepare.handle",
+            trace_id=message.tx_id,
+            user_id=message.user_id,
+            amount=message.amount,
     ):
         success, error = prepare_payment_tx(message.tx_id, message.user_id, int(message.amount))
         reply = PreparePaymentReply(
@@ -177,28 +199,29 @@ def handle_prepare_payment_message(message: PreparePaymentRequest):
             error=error,
         )
         with span(
-            app.logger,
-            "payment",
-            "payment.prepare.reply_publish",
-            trace_id=message.tx_id,
-            success=success,
+                app.logger,
+                "payment",
+                "payment.prepare.reply_publish",
+                trace_id=message.tx_id,
+                success=success,
         ):
-            publish(
+            _submit_kafka_task(
                 topic="2pc.payment.prepare.replies",
+                idempotency_key=message.idempotency_key,
                 key=message.tx_id,
-                value=reply,
-                partition=message.coordinator_partition,
+                message=reply,
+                partition=message.coordinator_partition
             )
 
 
 def handle_payment_decision_message(message: PaymentDecisionRequest):
     decision = str(message.decision).upper()
     with span(
-        app.logger,
-        "payment",
-        "payment.decision.handle",
-        trace_id=message.tx_id,
-        decision=decision,
+            app.logger,
+            "payment",
+            "payment.decision.handle",
+            trace_id=message.tx_id,
+            decision=decision,
     ):
         if decision == "COMMIT":
             success, error = commit_payment_tx(message.tx_id)
@@ -214,17 +237,18 @@ def handle_payment_decision_message(message: PaymentDecisionRequest):
             error=error,
         )
         with span(
-            app.logger,
-            "payment",
-            "payment.decision.reply_publish",
-            trace_id=message.tx_id,
-            decision=decision,
-            success=success,
+                app.logger,
+                "payment",
+                "payment.decision.reply_publish",
+                trace_id=message.tx_id,
+                decision=decision,
+                success=success,
         ):
-            publish(
+            _submit_kafka_task(
                 topic="2pc.payment.decision.replies",
+                idempotency_key=message.idempotency_key,
                 key=message.tx_id,
-                value=reply,
+                message=reply,
                 partition=message.coordinator_partition,
             )
 
