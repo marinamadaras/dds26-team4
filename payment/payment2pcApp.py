@@ -126,6 +126,7 @@ def handle_payment_request(message: PaymentRequest):
             user_id=message.user_id,
             amount=message.amount,
             success=True,
+            idempotency_key = message.idempotency_key,
         )
     except Exception as e:
         reply = PaymentReply(
@@ -133,7 +134,9 @@ def handle_payment_request(message: PaymentRequest):
             user_id=message.user_id,
             amount=message.amount,
             success=False,
+            idempotency_key=message.idempotency_key,
             error=str(e),
+
         )
 
     _submit_kafka_task(
@@ -168,7 +171,9 @@ def handle_rollback_payment_request(message: RollbackPaymentRequest):
         user_id=message.user_id,
         amount=message.amount,
         success=False,
+        idempotency_key=message.idempotency_key,
         error="rollback payment not implemented",
+
     )
 
 
@@ -187,7 +192,9 @@ def handle_prepare_payment_message(message: PreparePaymentRequest):
         tx_id=message.tx_id,
         coordinator_partition=message.coordinator_partition,
         success=success,
+        idempotency_key=message.idempotency_key,
         error=error,
+
     )
 
 
@@ -213,7 +220,9 @@ def handle_payment_decision_message(message: PaymentDecisionRequest):
         coordinator_partition=message.coordinator_partition,
         decision=decision,
         success=success,
+        idempotency_key=message.idempotency_key,
         error=error,
+
     )
 
     _submit_kafka_task(
