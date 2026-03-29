@@ -7,6 +7,7 @@ import zlib
 import msgspec
 from confluent_kafka import Consumer, Producer, TopicPartition, OFFSET_END
 from flask import Flask, jsonify, Response, request
+from span_logger import span
 
 BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:29092")
 PARTITIONS = int(os.getenv("KAFKA_PARTITIONS", "3"))
@@ -97,6 +98,15 @@ def _reply_consumer_loop(partition: int):
             if msg.partition() != pending["partition"]:
                 continue
 
+            with span(
+                app.logger,
+                "api-gateway",
+                "gateway.reply.matched",
+                trace_id=request_id,
+                partition=partition,
+                reply_topic=msg.topic(),
+            ):
+                pass
             pending["response"] = (
                 int(data.get("status_code", 500)),
                 data.get("body", ""),
@@ -138,33 +148,68 @@ def _send_command(
         "method": method,
         "action": action,
     }
-    if not _reply_consumer_ready[partition].wait(timeout=5):
-        return 503, {"error": "Gateway reply consumer not ready"}
-
-    pending = {
-        "event": threading.Event(),
-        "response": None,
-        "reply_topic": reply_topic,
-        "partition": partition,
-    }
-    with _pending_lock:
-        _pending_requests[request_id] = pending
-
-    try:
-        producer.produce(
-            command_topic,
-            key=key.encode(),
-            value=msgspec.json.encode(payload),
+    with span(
+        app.logger,
+        "api-gateway",
+        "gateway.command.total",
+        trace_id=request_id,
+        command_topic=command_topic,
+        reply_topic=reply_topic,
+        action=action,
+        method=method,
+        partition=partition,
+    ):
+        with span(
+            app.logger,
+            "api-gateway",
+            "gateway.reply_consumer.wait_ready",
+            trace_id=request_id,
             partition=partition,
-        )
-        producer.flush(2)
+        ):
+            if not _reply_consumer_ready[partition].wait(timeout=5):
+                return 503, {"error": "Gateway reply consumer not ready"}
 
-        if not pending["event"].wait(timeout=REQUEST_TIMEOUT_SECONDS):
-            return 504, {"error": "Gateway timeout waiting for service reply"}
-        return pending["response"]
-    finally:
+        pending = {
+            "event": threading.Event(),
+            "response": None,
+            "reply_topic": reply_topic,
+            "partition": partition,
+        }
         with _pending_lock:
-            _pending_requests.pop(request_id, None)
+            _pending_requests[request_id] = pending
+
+        try:
+            with span(
+                app.logger,
+                "api-gateway",
+                "gateway.command.publish",
+                trace_id=request_id,
+                command_topic=command_topic,
+                partition=partition,
+            ):
+                producer.produce(
+                    command_topic,
+                    key=key.encode(),
+                    value=msgspec.json.encode(payload),
+                    partition=partition,
+                )
+                producer.flush(2)
+
+            with span(
+                app.logger,
+                "api-gateway",
+                "gateway.reply.wait",
+                trace_id=request_id,
+                reply_topic=reply_topic,
+                partition=partition,
+                timeout_seconds=REQUEST_TIMEOUT_SECONDS,
+            ):
+                if not pending["event"].wait(timeout=REQUEST_TIMEOUT_SECONDS):
+                    return 504, {"error": "Gateway timeout waiting for service reply"}
+            return pending["response"]
+        finally:
+            with _pending_lock:
+                _pending_requests.pop(request_id, None)
 
 
 def _broadcast_command(
