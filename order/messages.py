@@ -47,6 +47,7 @@ class RollbackPaymentRequest(BaseMessage):
 
 class CheckoutRequested(BaseMessage):
     order_id: str
+    idempotency_key: str = ""
     type: str = "CheckoutRequested"
 
 
@@ -54,6 +55,7 @@ class PrepareStockRequest(BaseMessage):
     tx_id: str
     coordinator_partition: int
     items: list[tuple[str, int]]
+    idempotency_key: str = ""
     type: str = "PrepareStockRequest"
 
 class CompensateOrderRequest(BaseMessage):
@@ -68,6 +70,7 @@ class PrepareStockReply(BaseMessage):
     coordinator_partition: int
     success: bool
     error: str | None = None
+    idempotency_key: str = ""
     type: str = "PrepareStockReply"
 
 
@@ -76,6 +79,7 @@ class PreparePaymentRequest(BaseMessage):
     coordinator_partition: int
     user_id: str
     amount: int
+    idempotency_key: str = ""
     type: str = "PreparePaymentRequest"
 
 
@@ -84,6 +88,7 @@ class PreparePaymentReply(BaseMessage):
     coordinator_partition: int
     success: bool
     error: str | None = None
+    idempotency_key: str = ""
     type: str = "PreparePaymentReply"
 
 
@@ -91,6 +96,7 @@ class StockDecisionRequest(BaseMessage):
     tx_id: str
     coordinator_partition: int
     decision: str
+    idempotency_key: str = ""
     type: str = "StockDecisionRequest"
 
 
@@ -100,6 +106,7 @@ class StockDecisionReply(BaseMessage):
     decision: str
     success: bool
     error: str | None = None
+    idempotency_key: str = ""
     type: str = "StockDecisionReply"
 
 
@@ -107,6 +114,7 @@ class PaymentDecisionRequest(BaseMessage):
     tx_id: str
     coordinator_partition: int
     decision: str
+    idempotency_key: str = ""
     type: str = "PaymentDecisionRequest"
 
 
@@ -116,6 +124,7 @@ class PaymentDecisionReply(BaseMessage):
     decision: str
     success: bool
     error: str | None = None
+    idempotency_key: str = ""
     type: str = "PaymentDecisionReply"
 
 

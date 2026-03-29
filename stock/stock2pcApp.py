@@ -140,6 +140,7 @@ def subtract_stock_core(item_id: str, amount: int) -> StockValue:
 def handle_find_stock(message: FindStock, order_id: str):
     app.logger.info("received find.stock request order_id=%s item_id=%s qty=%s", message.order_id, message.item_id, message.quantity)
     item_entry = get_item_from_db_nullable(message.item_id)
+
     if item_entry is None:
         reply = FindStockReply(
             order_id=message.order_id,
@@ -162,7 +163,7 @@ def handle_find_stock(message: FindStock, order_id: str):
 
     _submit_kafka_task(
         topic="find.stock.replies",
-        idempotency_key=reply.idempotency_key,
+        idempotency_key=message.idempotency_key,
         key=order_id,
         message=reply,
         partition=_partition_from_order_id(order_id),
@@ -204,13 +205,15 @@ def handle_subtract_stock(message: SubtractStock):
             item_id=message.item_id,
             quantity=message.quantity,
             success=False,
+            idempotency_key=message.idempotency_key,
             error=str(e),
+
         )
 
 
     _submit_kafka_task(
         topic="subtract.stock.replies",
-        idempotency_key=reply.idempotency_key,
+        idempotency_key=message.idempotency_key,
         key=message.order_id,
         message=reply,
         partition=_partition_from_order_id(message.order_id),
@@ -223,12 +226,14 @@ def handle_rollback_stock(message: RollbackStockRequest):
         item_id=message.item_id,
         quantity=message.quantity,
         success=False,
+        idempotency_key=message.idempotency_key,
         error="rollback stock not implemented",
+
     )
 
     _submit_kafka_task(
         topic="rollback.stock.replies",
-        idempotency_key=reply.idempotency_key,
+        idempotency_key=message.idempotency_key,
         key=message.order_id,
         message=reply,
         partition=_partition_from_order_id(message.order_id),
@@ -249,6 +254,7 @@ def handle_prepare_stock_message(message: PrepareStockRequest):
             coordinator_partition=message.coordinator_partition,
             success=success,
             error=error,
+            idempotency_key=message.idempotency_key,
         )
         with span(
                 app.logger,
@@ -259,10 +265,10 @@ def handle_prepare_stock_message(message: PrepareStockRequest):
         ):
             _submit_kafka_task(
                 topic="2pc.stock.prepare.replies",
-                idempotency_key=reply.idempotency_key,
+                idempotency_key=message.idempotency_key,
                 key=message.tx_id,
                 message=reply,
-                partition=_partition_from_order_id(message.tx_id),
+                partition=message.coordinator_partition,
             )
 
 
@@ -287,6 +293,7 @@ def handle_stock_decision_message(message: StockDecisionRequest):
             decision=decision,
             success=success,
             error=error,
+            idempotency_key=message.idempotency_key,
         )
         with span(
                 app.logger,
@@ -298,10 +305,10 @@ def handle_stock_decision_message(message: StockDecisionRequest):
         ):
             _submit_kafka_task(
                 topic="2pc.stock.decision.replies",
-                idempotency_key=reply.idempotency_key,
+                idempotency_key=message.idempotency_key,
                 key=message.tx_id,
                 message=reply,
-                partition=_partition_from_order_id(message.tx_id),
+                partition=message.coordinator_partition,
             )
 
 def consumer_loop():
