@@ -1,4 +1,5 @@
 import json
+import os
 import random
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -12,6 +13,8 @@ with open(URLS_PATH) as f:
     urls = json.load(f)
     ORDER_URL = urls['ORDER_URL']
 
+ORDER_PARTITIONS = int(os.getenv("KAFKA_PARTITIONS", "3"))
+
 
 def normalize_host(url: str) -> str:
     parsed = urlsplit(url)
@@ -21,17 +24,36 @@ def normalize_host(url: str) -> str:
     return f"{parsed.scheme}://{parsed.netloc}"
 
 
+def classify_checkout_response(status_code: int, body: str) -> tuple[str, bool]:
+    lowered = body.lower()
+    if 500 <= status_code:
+        return "/orders/checkout/[order_id] server-error", False
+    if 400 <= status_code < 500:
+        return "/orders/checkout/[order_id] client-error", True
+    if "in progress" in lowered or "retry" in lowered:
+        return "/orders/checkout/[order_id] retrying", False
+    if "already paid" in lowered:
+        return "/orders/checkout/[order_id] already-paid", False
+    if "queued" in lowered or "requested asynchronously" in lowered:
+        return "/orders/checkout/[order_id] queued", False
+    return "/orders/checkout/[order_id] other", False
+
+
 class CreateAndCheckoutOrder(SequentialTaskSet):
     @task
     def user_checks_out_order(self):
-        # Load profile focuses on checkout contention against pre-seeded orders.
-        order_id = random.randint(0, NUMBER_OF_ORDERS - 1)
+        # Batch init stores orders as s<partition>_<index>, so Locust must target the same shape.
+        order_partition = random.randint(0, ORDER_PARTITIONS - 1)
+        order_index = random.randint(0, NUMBER_OF_ORDERS - 1)
+        order_id = f"s{order_partition}_{order_index}"
         with self.client.post(
             f"/orders/checkout/{order_id}",
             name="/orders/checkout/[order_id]",
             catch_response=True,
         ) as response:
-            if 400 <= response.status_code < 500:
+            request_name, is_failure = classify_checkout_response(response.status_code, response.text)
+            response.request_meta["name"] = request_name
+            if is_failure:
                 response.failure(response.text)
             else:
                 response.success()

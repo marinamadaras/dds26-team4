@@ -42,3 +42,43 @@ Suggested starting profile:
 
 - The test targets random pre-created orders via `POST /orders/checkout/{order_id}`.
 - It marks `4xx` as failures and treats other responses as success.
+
+## 5) Run our own consistency benchmarks
+
+
+This is adapted from the course benchmark, but made more project-friendly:
+- it uses one unique user per order so the expected result is easier to reason about
+- it verifies consistency from API state instead of scraping temporary log files
+- it works with both Saga and 2PC order representations
+- it prints a human-readable summary and exits non-zero if any consistency check fails
+- `--json` also prints the raw JSON report
+
+Default scenario:
+- `1000` users
+- `1` shared item
+- shared item stock `100`
+- item price `1`
+- user credit `1`
+- `1000` concurrent checkout attempts
+
+
+```bash
+python loadtest/run_consistency_benchmark.py --users 300 --stock 50 --credit 5 --price-list 1,2,3
+```
+
+Chaos version:
+
+```bash
+python loadtest/run_chaos_consistency_benchmark.py --users 300 --stock 50 --credit 5 --price-list 1,2,3 --kill-services order-service-2 --kill-delay 1.0 --checkout-spread 2.0
+```
+
+Useful flags:
+- `--users`
+- `--stock`
+- `--price`
+- `--price-list`
+- `--credit`
+- `--quantity`
+- `--parallelism`
+
+The chaos benchmark runs the same consistency scenario, but kills one or more app containers during live checkout traffic and then checks whether the final stock and credit are still consistent after recovery.
