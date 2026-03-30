@@ -41,6 +41,7 @@ from messages import (
 from span_logger import span, log_span_event
 KAFKA_CONSUMER_INSTANCE_ID = os.getenv("KAFKA_CONSUMER_INSTANCE_ID", "order-service-0")
 KAFKA_CONSUMER_PARTITION = int(os.getenv("KAFKA_CONSUMER_PARTITION", "0"))
+PARTITIONS = int(os.getenv("ORCHESTRATOR_PARTITIONS", "3"))
 DB_ERROR_STR = "DB error"
 app = Flask("order-service")
 _consumer_thread: threading.Thread | None = None
@@ -822,16 +823,19 @@ def batch_init_users(n: int, n_items: int, n_users: int, item_price: int):
     item_price = int(item_price)
 
     def generate_entry() -> OrderValue:
-        user_id = random.randint(0, n_users - 1)
-        item1_id = random.randint(0, n_items - 1)
-        item2_id = random.randint(0, n_items - 1)
+        user_partition = random.randint(0, PARTITIONS - 1)
+        item1_partition = random.randint(0, PARTITIONS - 1)
+        item2_partition = random.randint(0, PARTITIONS - 1)
+        user_id = f"p{user_partition}_{random.randint(0, n_users - 1)}"
+        item1_id = f"t{item1_partition}_{random.randint(0, n_items - 1)}"
+        item2_id = f"t{item2_partition}_{random.randint(0, n_items - 1)}"
         value = OrderValue(paid=False,
-                           items=[(f"{item1_id}", 1), (f"{item2_id}", 1)],
-                           user_id=f"{user_id}",
+                           items=[(item1_id, 1), (item2_id, 1)],
+                           user_id=user_id,
                            total_cost=2*item_price)
         return value
 
-    kv_pairs: dict[str, bytes] = {f"{i}": msgpack.encode(generate_entry())
+    kv_pairs: dict[str, bytes] = {f"s{KAFKA_CONSUMER_PARTITION}_{i}": msgpack.encode(generate_entry())
                                   for i in range(n)}
     try:
         db.mset(kv_pairs)
