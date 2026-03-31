@@ -43,6 +43,10 @@ class BenchmarkConfig:
     json_output: bool
 
 
+class BenchmarkSetupError(RuntimeError):
+    pass
+
+
 @dataclass
 class TerminalOrder:
     order_id: str
@@ -161,7 +165,10 @@ async def wait_for_item_on_order(
         if item_id in item_ids and order.get("total_cost") == expected_total_cost:
             return
         await asyncio.sleep(config.poll_interval_s)
-    raise RuntimeError(f"order {order_id} never reflected item {item_id} before timeout")
+    raise BenchmarkSetupError(
+        "Setup failure: addItem did not settle before timeout "
+        f"(order_id={order_id}, item_id={item_id}, expected_total_cost={expected_total_cost})"
+    )
 
 
 async def attach_items_to_orders(
@@ -374,6 +381,13 @@ def print_human_report(report: dict[str, Any]) -> None:
     print(f"Overall result: {overall}")
 
 
+def print_setup_failure(message: str) -> None:
+    print("Consistency Benchmark")
+    print()
+    print("Setup failed")
+    print(message)
+
+
 async def run_benchmark(config: BenchmarkConfig) -> dict[str, Any]:
     timeout = aiohttp.ClientTimeout(total=None, connect=config.request_timeout_s, sock_read=config.request_timeout_s)
     async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -469,7 +483,11 @@ async def run_benchmark(config: BenchmarkConfig) -> dict[str, Any]:
 
 def main() -> int:
     config = parse_args()
-    report = asyncio.run(run_benchmark(config))
+    try:
+        report = asyncio.run(run_benchmark(config))
+    except BenchmarkSetupError as exc:
+        print_setup_failure(str(exc))
+        return 2
     print_human_report(report)
     if config.json_output:
         print()

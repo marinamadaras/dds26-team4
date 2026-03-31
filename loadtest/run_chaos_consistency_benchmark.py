@@ -125,7 +125,7 @@ def parse_args() -> ChaosBenchmarkConfig:
     )
     parser.add_argument("--credit", type=int, default=1)
     parser.add_argument("--quantity", type=int, default=1)
-    parser.add_argument("--request-timeout", type=float, default=10.0)
+    parser.add_argument("--request-timeout", type=float, default=30.0)
     parser.add_argument("--settle-timeout", type=float, default=60.0)
     parser.add_argument("--poll-interval", type=float, default=0.25)
     parser.add_argument("--parallelism", type=int, default=200)
@@ -133,8 +133,8 @@ def parse_args() -> ChaosBenchmarkConfig:
     parser.add_argument("--json", action="store_true", help="Also print the raw JSON report.")
     parser.add_argument(
         "--kill-services",
-        default="order-service-2",
-        help="Comma-separated docker compose service names to kill during the run.",
+        default="",
+        help="Comma-separated docker compose service names to kill during the run. Leave empty to run without killing services.",
     )
     parser.add_argument(
         "--kill-delay",
@@ -282,7 +282,18 @@ async def run_benchmark(config: ChaosBenchmarkConfig) -> dict[str, Any]:
 
 def main() -> int:
     config = parse_args()
-    report = asyncio.run(run_benchmark(config))
+    try:
+        report = asyncio.run(run_benchmark(config))
+    except base.BenchmarkSetupError as exc:
+        print("Chaos consistency benchmark")
+        print()
+        print("Chaos plan")
+        print(f"Kill services: {', '.join(config.kill_services) if config.kill_services else 'none'}")
+        print(f"Kill delay after checkout start: {config.kill_delay_s}s")
+        print(f"Checkout spread window: {config.checkout_spread_s}s")
+        print()
+        base.print_setup_failure(str(exc))
+        return 2
     print_human_report(report)
     if config.json_output:
         print()
