@@ -69,6 +69,7 @@ services:
     restart: unless-stopped
     cpus: "1.00"
     environment:
+      KAFKA_PARTITIONS: 1
       GATEWAY_URL: http://gateway:80
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 0
@@ -97,6 +98,7 @@ services:
     restart: unless-stopped
     cpus: "1.00"
     environment:
+      KAFKA_PARTITIONS: 1
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 0
       KAFKA_CONSUMER_INSTANCE_ID: stock-service-0
@@ -124,6 +126,7 @@ services:
     restart: unless-stopped
     cpus: "1.00"
     environment:
+      KAFKA_PARTITIONS: 1
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 0
       KAFKA_CONSUMER_INSTANCE_ID: payment-service-0

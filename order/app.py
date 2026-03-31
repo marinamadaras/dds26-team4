@@ -38,7 +38,7 @@ REQ_ERROR_STR = "Requests error"
 GATEWAY_URL = os.environ['GATEWAY_URL']
 KAFKA_CONSUMER_PARTITION = int(os.getenv("KAFKA_CONSUMER_PARTITION", "0"))
 KAFKA_CONSUMER_INSTANCE_ID = os.getenv("KAFKA_CONSUMER_INSTANCE_ID", "order-service-0")
-PARTITIONS = int(os.getenv("ORCHESTRATOR_PARTITIONS", "3"))
+PARTITIONS = int(os.getenv("KAFKA_PARTITIONS", "3"))
 
 app = Flask("order-service")
 _consumer_thread: threading.Thread | None = None

@@ -69,6 +69,7 @@ services:
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
       - KAFKA_CONSUMER_PARTITION=0
       - KAFKA_CONSUMER_INSTANCE_ID=order-service-0
+      - KAFKA_PARTITIONS=3
       - REDIS_HOST=order-db-0
     command: gunicorn -b 0.0.0.0:5000 -w 1 --timeout 30 --log-level=info ${ORDER_APP_MODULE:-order2pcApp}:app
     env_file:
@@ -89,6 +90,7 @@ services:
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
       - KAFKA_CONSUMER_PARTITION=1
       - KAFKA_CONSUMER_INSTANCE_ID=order-service-1
+      - KAFKA_PARTITIONS=3
       - REDIS_HOST=order-db-1
     command: gunicorn -b 0.0.0.0:5000 -w 1 --timeout 30 --log-level=info ${ORDER_APP_MODULE:-order2pcApp}:app
     env_file:
@@ -108,6 +110,7 @@ services:
       - GATEWAY_URL=http://gateway:80
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
       - KAFKA_CONSUMER_PARTITION=2
+      - KAFKA_PARTITIONS=3
       - KAFKA_CONSUMER_INSTANCE_ID=order-service-2
       - REDIS_HOST=order-db-2
     command: gunicorn -b 0.0.0.0:5000 -w 1 --timeout 30 --log-level=info ${ORDER_APP_MODULE:-order2pcApp}:app
@@ -145,6 +148,7 @@ services:
       - KAFKA_CONSUMER_PARTITION=0
       - KAFKA_CONSUMER_INSTANCE_ID=stock-service-0
       - REDIS_HOST=stock-db-0
+      - KAFKA_PARTITIONS=3
     command: gunicorn -b 0.0.0.0:5000 -w 1 --timeout 30 --log-level=info ${STOCK_APP_MODULE:-stock2pcApp}:app
     env_file:
       - env/stock_redis.env
@@ -164,6 +168,7 @@ services:
       - KAFKA_CONSUMER_PARTITION=1
       - KAFKA_CONSUMER_INSTANCE_ID=stock-service-1
       - REDIS_HOST=stock-db-1
+      - KAFKA_PARTITIONS=3
     command: gunicorn -b 0.0.0.0:5000 -w 1 --timeout 30 --log-level=info ${STOCK_APP_MODULE:-stock2pcApp}:app
     env_file:
       - env/stock_redis.env
@@ -183,6 +188,7 @@ services:
       - KAFKA_CONSUMER_PARTITION=2
       - KAFKA_CONSUMER_INSTANCE_ID=stock-service-2
       - REDIS_HOST=stock-db-2
+      - KAFKA_PARTITIONS=3
     command: gunicorn -b 0.0.0.0:5000 -w 1 --timeout 30 --log-level=info ${STOCK_APP_MODULE:-stock2pcApp}:app
     env_file:
       - env/stock_redis.env
@@ -218,6 +224,7 @@ services:
       - KAFKA_CONSUMER_PARTITION=0
       - KAFKA_CONSUMER_INSTANCE_ID=payment-service-0
       - REDIS_HOST=payment-db-0
+      - KAFKA_PARTITIONS=3
     command: gunicorn -b 0.0.0.0:5000 -w 1 --timeout 30 --log-level=info ${PAYMENT_APP_MODULE:-payment2pcApp}:app
     env_file:
       - env/payment_redis.env
@@ -237,6 +244,7 @@ services:
       - KAFKA_CONSUMER_PARTITION=1
       - KAFKA_CONSUMER_INSTANCE_ID=payment-service-1
       - REDIS_HOST=payment-db-1
+      - KAFKA_PARTITIONS=3
     command: gunicorn -b 0.0.0.0:5000 -w 1 --timeout 30 --log-level=info ${PAYMENT_APP_MODULE:-payment2pcApp}:app
     env_file:
       - env/payment_redis.env
@@ -256,6 +264,7 @@ services:
       - KAFKA_CONSUMER_PARTITION=2
       - KAFKA_CONSUMER_INSTANCE_ID=payment-service-2
       - REDIS_HOST=payment-db-2
+      - KAFKA_PARTITIONS=3
     command: gunicorn -b 0.0.0.0:5000 -w 1 --timeout 30 --log-level=info ${PAYMENT_APP_MODULE:-payment2pcApp}:app
     env_file:
       - env/payment_redis.env
