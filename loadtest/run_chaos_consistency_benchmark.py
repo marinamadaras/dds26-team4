@@ -266,13 +266,12 @@ async def run_benchmark(config: ChaosBenchmarkConfig) -> dict[str, Any]:
         "core_checks": {
             "chaos_command_succeeded": chaos_result["returncode"] == 0,
             "no_actual_checkout_failures": actual_checkout_failure_count == 0,
-            "credit_matches_capacity": total_remaining_credit == expected_credit_from_capacity,
-        },
-        "additional_signals": {
-            "successes_match_capacity": success_count == expected_capacity_successes,
             "no_timeouts": timeout_count == 0,
             "stock_matches_observed_successes": final_total_stock == expected_total_stock_from_observed_successes,
             "credit_matches_observed_successes": total_remaining_credit == expected_credit_from_observed_successes,
+        },
+        "additional_signals": {
+            "successes_match_capacity": success_count == expected_capacity_successes,
             "stock_matches_capacity": final_total_stock == expected_total_stock_from_capacity,
             "credit_matches_capacity": total_remaining_credit == expected_credit_from_capacity,
         },
