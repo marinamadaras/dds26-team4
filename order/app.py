@@ -50,7 +50,7 @@ db: redis.Redis = redis.Redis(host=os.environ['REDIS_HOST'],
 
 
 MAX_RETRIES    = 5
-RETRY_TIMEOUT  = 30
+RETRY_TIMEOUT  = 20
 RETRY_INTERVAL = 10   # how often the checker wakes up
 
 _consumer_retry_counts: dict[str, int] = {}

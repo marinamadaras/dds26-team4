@@ -9,11 +9,12 @@ These tests hit the real services via the gateway and verify that:
 Requirements: all services must be running (docker-compose up)
 """
 
+import os
 import requests
 import time
 import pytest
 
-GATEWAY = "http://gateway:80"
+GATEWAY = os.getenv("TEST_GATEWAY", "http://127.0.0.1:8000")
 
 # How long to wait for the async saga to complete
 SAGA_TIMEOUT = 15      # seconds total
