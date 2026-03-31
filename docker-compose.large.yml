@@ -69,6 +69,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       GATEWAY_URL: http://gateway:80
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 0
@@ -96,6 +97,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       GATEWAY_URL: http://gateway:80
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 1
@@ -123,6 +125,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       GATEWAY_URL: http://gateway:80
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 2
@@ -150,6 +153,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       GATEWAY_URL: http://gateway:80
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 3
@@ -177,6 +181,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       GATEWAY_URL: http://gateway:80
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 4
@@ -204,6 +209,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       GATEWAY_URL: http://gateway:80
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 5
@@ -231,6 +237,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       GATEWAY_URL: http://gateway:80
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 6
@@ -258,6 +265,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       GATEWAY_URL: http://gateway:80
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 7
@@ -285,6 +293,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       GATEWAY_URL: http://gateway:80
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 8
@@ -312,6 +321,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       GATEWAY_URL: http://gateway:80
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 9
@@ -339,6 +349,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       GATEWAY_URL: http://gateway:80
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 10
@@ -366,6 +377,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       GATEWAY_URL: http://gateway:80
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 11
@@ -393,6 +405,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       GATEWAY_URL: http://gateway:80
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 12
@@ -420,6 +433,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       GATEWAY_URL: http://gateway:80
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 13
@@ -447,6 +461,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       GATEWAY_URL: http://gateway:80
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 14
@@ -474,6 +489,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       GATEWAY_URL: http://gateway:80
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 15
@@ -501,6 +517,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       GATEWAY_URL: http://gateway:80
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 16
@@ -528,6 +545,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       GATEWAY_URL: http://gateway:80
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 17
@@ -555,6 +573,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       GATEWAY_URL: http://gateway:80
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 18
@@ -582,6 +601,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       GATEWAY_URL: http://gateway:80
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 19
@@ -609,6 +629,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       GATEWAY_URL: http://gateway:80
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 20
@@ -636,6 +657,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       GATEWAY_URL: http://gateway:80
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 21
@@ -663,6 +685,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       GATEWAY_URL: http://gateway:80
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 22
@@ -690,6 +713,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       GATEWAY_URL: http://gateway:80
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 23
@@ -718,6 +742,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 0
       KAFKA_CONSUMER_INSTANCE_ID: stock-service-0
@@ -744,6 +769,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 1
       KAFKA_CONSUMER_INSTANCE_ID: stock-service-1
@@ -770,6 +796,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 2
       KAFKA_CONSUMER_INSTANCE_ID: stock-service-2
@@ -796,6 +823,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 3
       KAFKA_CONSUMER_INSTANCE_ID: stock-service-3
@@ -822,6 +850,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 4
       KAFKA_CONSUMER_INSTANCE_ID: stock-service-4
@@ -848,6 +877,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 5
       KAFKA_CONSUMER_INSTANCE_ID: stock-service-5
@@ -874,6 +904,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 6
       KAFKA_CONSUMER_INSTANCE_ID: stock-service-6
@@ -900,6 +931,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 7
       KAFKA_CONSUMER_INSTANCE_ID: stock-service-7
@@ -926,6 +958,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 8
       KAFKA_CONSUMER_INSTANCE_ID: stock-service-8
@@ -952,6 +985,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 9
       KAFKA_CONSUMER_INSTANCE_ID: stock-service-9
@@ -978,6 +1012,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 10
       KAFKA_CONSUMER_INSTANCE_ID: stock-service-10
@@ -1004,6 +1039,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 11
       KAFKA_CONSUMER_INSTANCE_ID: stock-service-11
@@ -1030,6 +1066,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 12
       KAFKA_CONSUMER_INSTANCE_ID: stock-service-12
@@ -1056,6 +1093,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 13
       KAFKA_CONSUMER_INSTANCE_ID: stock-service-13
@@ -1082,6 +1120,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 14
       KAFKA_CONSUMER_INSTANCE_ID: stock-service-14
@@ -1108,6 +1147,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 15
       KAFKA_CONSUMER_INSTANCE_ID: stock-service-15
@@ -1134,6 +1174,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 16
       KAFKA_CONSUMER_INSTANCE_ID: stock-service-16
@@ -1160,6 +1201,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 17
       KAFKA_CONSUMER_INSTANCE_ID: stock-service-17
@@ -1186,6 +1228,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 18
       KAFKA_CONSUMER_INSTANCE_ID: stock-service-18
@@ -1212,6 +1255,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 19
       KAFKA_CONSUMER_INSTANCE_ID: stock-service-19
@@ -1238,6 +1282,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 20
       KAFKA_CONSUMER_INSTANCE_ID: stock-service-20
@@ -1264,6 +1309,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 21
       KAFKA_CONSUMER_INSTANCE_ID: stock-service-21
@@ -1290,6 +1336,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 22
       KAFKA_CONSUMER_INSTANCE_ID: stock-service-22
@@ -1316,6 +1363,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 23
       KAFKA_CONSUMER_INSTANCE_ID: stock-service-23
@@ -1343,6 +1391,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 0
       KAFKA_CONSUMER_INSTANCE_ID: payment-service-0
@@ -1369,6 +1418,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 1
       KAFKA_CONSUMER_INSTANCE_ID: payment-service-1
@@ -1395,6 +1445,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 2
       KAFKA_CONSUMER_INSTANCE_ID: payment-service-2
@@ -1421,6 +1472,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 3
       KAFKA_CONSUMER_INSTANCE_ID: payment-service-3
@@ -1447,6 +1499,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 4
       KAFKA_CONSUMER_INSTANCE_ID: payment-service-4
@@ -1473,6 +1526,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 5
       KAFKA_CONSUMER_INSTANCE_ID: payment-service-5
@@ -1499,6 +1553,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 6
       KAFKA_CONSUMER_INSTANCE_ID: payment-service-6
@@ -1525,6 +1580,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 7
       KAFKA_CONSUMER_INSTANCE_ID: payment-service-7
@@ -1551,6 +1607,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 8
       KAFKA_CONSUMER_INSTANCE_ID: payment-service-8
@@ -1577,6 +1634,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 9
       KAFKA_CONSUMER_INSTANCE_ID: payment-service-9
@@ -1603,6 +1661,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 10
       KAFKA_CONSUMER_INSTANCE_ID: payment-service-10
@@ -1629,6 +1688,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 11
       KAFKA_CONSUMER_INSTANCE_ID: payment-service-11
@@ -1655,6 +1715,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 12
       KAFKA_CONSUMER_INSTANCE_ID: payment-service-12
@@ -1681,6 +1742,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 13
       KAFKA_CONSUMER_INSTANCE_ID: payment-service-13
@@ -1707,6 +1769,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 14
       KAFKA_CONSUMER_INSTANCE_ID: payment-service-14
@@ -1733,6 +1796,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 15
       KAFKA_CONSUMER_INSTANCE_ID: payment-service-15
@@ -1759,6 +1823,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 16
       KAFKA_CONSUMER_INSTANCE_ID: payment-service-16
@@ -1785,6 +1850,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 17
       KAFKA_CONSUMER_INSTANCE_ID: payment-service-17
@@ -1811,6 +1877,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 18
       KAFKA_CONSUMER_INSTANCE_ID: payment-service-18
@@ -1837,6 +1904,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 19
       KAFKA_CONSUMER_INSTANCE_ID: payment-service-19
@@ -1863,6 +1931,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 20
       KAFKA_CONSUMER_INSTANCE_ID: payment-service-20
@@ -1889,6 +1958,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 21
       KAFKA_CONSUMER_INSTANCE_ID: payment-service-21
@@ -1915,6 +1985,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 22
       KAFKA_CONSUMER_INSTANCE_ID: payment-service-22
@@ -1941,6 +2012,7 @@ services:
     restart: unless-stopped
     cpus: "0.90"
     environment:
+      KAFKA_PARTITIONS: 24
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 23
       KAFKA_CONSUMER_INSTANCE_ID: payment-service-23

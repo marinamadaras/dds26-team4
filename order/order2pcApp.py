@@ -41,7 +41,7 @@ from messages import (
 from span_logger import span, log_span_event
 KAFKA_CONSUMER_INSTANCE_ID = os.getenv("KAFKA_CONSUMER_INSTANCE_ID", "order-service-0")
 KAFKA_CONSUMER_PARTITION = int(os.getenv("KAFKA_CONSUMER_PARTITION", "0"))
-PARTITIONS = int(os.getenv("ORCHESTRATOR_PARTITIONS", "3"))
+PARTITIONS = int(os.getenv("KAFKA_PARTITIONS", "3"))
 DB_ERROR_STR = "DB error"
 app = Flask("order-service")
 _consumer_thread: threading.Thread | None = None
