@@ -347,6 +347,14 @@ def print_human_report(report: dict[str, Any]) -> None:
     print(f"Observed timed out orders: {report['observed_timeouts']}")
     print(f"Orders with unexpected credit after timeout: {report['unexpected_credit_after_timeout_count']}")
     print(f"Observed checkout request failures: {report['actual_checkout_failure_count']}")
+    print(
+        "Expected final stock from observed successful orders: "
+        f"{report['expected_stock_from_observed_successes']}"
+    )
+    print(
+        "Expected remaining total credit from observed successful orders: "
+        f"{report['expected_credit_from_observed_successes']}"
+    )
     print(f"Final total stock across shared items: {report['final_total_stock']}")
     print(f"Final stock by item: {_format_counts(report['final_stock_by_item'])}")
     print(f"Remaining total user credit: {report['total_remaining_credit']}")
@@ -445,13 +453,12 @@ async def run_benchmark(config: BenchmarkConfig) -> dict[str, Any]:
         "expected_credit_from_observed_successes": expected_credit_from_observed_successes,
         "core_checks": {
             "no_actual_checkout_failures": actual_checkout_failure_count == 0,
-            "credit_matches_capacity": total_remaining_credit == expected_credit_from_capacity,
-        },
-        "additional_signals": {
-            "successes_match_capacity": success_count == expected_capacity_successes,
             "no_timeouts": timeout_count == 0,
             "stock_matches_observed_successes": final_total_stock == expected_total_stock_from_observed_successes,
             "credit_matches_observed_successes": total_remaining_credit == expected_credit_from_observed_successes,
+        },
+        "additional_signals": {
+            "successes_match_capacity": success_count == expected_capacity_successes,
             "stock_matches_capacity": final_total_stock == expected_total_stock_from_capacity,
             "credit_matches_capacity": total_remaining_credit == expected_credit_from_capacity,
         },

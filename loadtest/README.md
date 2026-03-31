@@ -27,8 +27,24 @@ All endpoints are read from `loadtest/urls.json`.
 
 ## 4) Run Locust
 
+`loadtest/locustfile.py` now tries to infer the number of partitions by counting running `order-service-*` containers. If that detection does not work in your environment, you can still set `KAFKA_PARTITIONS` manually.
+
+If you want to set it explicitly for one of the topology variants, use the matching partition count:
+
+- `docker-compose.small.yml` -> `KAFKA_PARTITIONS=1`
+- `docker-compose.medium.yml` -> `KAFKA_PARTITIONS=12`
+- `docker-compose.large.yml` -> `KAFKA_PARTITIONS=24`
+
 ```bash
 locust -f loadtest/locustfile.py
+```
+
+Examples:
+
+```bash
+KAFKA_PARTITIONS=1 locust -f loadtest/locustfile.py
+KAFKA_PARTITIONS=12 locust -f loadtest/locustfile.py
+KAFKA_PARTITIONS=24 locust -f loadtest/locustfile.py
 ```
 
 Then open `http://localhost:8089`.

@@ -1,6 +1,8 @@
 import json
 import os
 import random
+import re
+import subprocess
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -9,11 +11,63 @@ from locust import HttpUser, SequentialTaskSet, constant, task
 from init_orders import NUMBER_OF_ORDERS
 
 URLS_PATH = Path(__file__).resolve().parent / "urls.json"
+REPO_ROOT = URLS_PATH.parent.parent
 with open(URLS_PATH) as f:
     urls = json.load(f)
     ORDER_URL = urls['ORDER_URL']
 
-ORDER_PARTITIONS = int(os.getenv("KAFKA_PARTITIONS", "3"))
+
+def detect_order_partitions() -> int:
+    configured = os.getenv("KAFKA_PARTITIONS")
+    if configured:
+        return int(configured)
+
+    try:
+        result = subprocess.run(
+            ["docker", "compose", "ps", "--services", "--status", "running"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=5,
+        )
+        partitions = {
+            int(match.group(1))
+            for line in result.stdout.splitlines()
+            if (match := re.match(r"^order-service-(\d+)$", line.strip()))
+        }
+        if partitions:
+            return len(partitions)
+    except Exception:
+        pass
+
+    try:
+        result = subprocess.run(
+            ["docker", "ps", "--format", "{{.Names}}"],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=5,
+        )
+        partitions = {
+            int(match.group(1))
+            for line in result.stdout.splitlines()
+            if (
+                match := re.search(
+                    r"(?:^|-)order-service-(\d+)(?:-\d+)?$",
+                    line.strip(),
+                )
+            )
+        }
+        if partitions:
+            return len(partitions)
+    except Exception:
+        pass
+
+    return 3
+
+
+ORDER_PARTITIONS = detect_order_partitions()
 
 
 def normalize_host(url: str) -> str:
@@ -61,7 +115,7 @@ class CreateAndCheckoutOrder(SequentialTaskSet):
 class MicroservicesUser(HttpUser):
     # Keep host sourced from urls.json so CLI/UI host misconfiguration is less likely.
     host = normalize_host(ORDER_URL)
-    wait_time = constant(1)
+    wait_time = constant(0)
     tasks = {
         CreateAndCheckoutOrder: 100
     }
