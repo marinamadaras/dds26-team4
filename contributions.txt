@@ -1,4 +1,4 @@
-Ada: partitioning/replication, and the kubernetes persistency we dont use
-Galya: saga and retry logic for saga
-Marina: testing/fixing saga + 2pc and adding support for message queues and watchdog
-Oskar: async 2pc and async db calls
+Ada: partitioning/replication, and the kubernetes persistency we dont use + idempotency + orchestrator scaffolding + add debugging info
+Galya: saga and retry logic for saga + implement orchestrator logic and retries, connections to services, persistence of tasks
+Marina: testing/fixing saga + 2pc and adding support for message queues + implement watchdog + adding consistency benchmark + stress test & fix partitioning and other bugs + provide easter egg meme
+Oskar: async 2pc and async db calls +  performance improvements + add time traces for finding bottlenecks + create different docker files for submission + brought chocolate + add easter egg script
