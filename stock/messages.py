@@ -72,6 +72,7 @@ class PrepareStockRequest(BaseMessage):
 class PrepareStockReply(BaseMessage):
     tx_id: str
     coordinator_partition: int
+    participant_partition: int
     success: bool
     error: str | None = None
     type: str = "PrepareStockReply"
@@ -87,6 +88,7 @@ class StockDecisionRequest(BaseMessage):
 class StockDecisionReply(BaseMessage):
     tx_id: str
     coordinator_partition: int
+    participant_partition: int
     decision: str
     success: bool
     error: str | None = None

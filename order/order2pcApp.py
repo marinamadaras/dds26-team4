@@ -87,13 +87,11 @@ def _partition_from_user_id(user_id: str) -> int:
     return _partition_from_prefixed_id(user_id, "p")
 
 
-def _stock_participant_partition(items: list[tuple[str, int]]) -> int:
-    if not items:
-        return KAFKA_CONSUMER_PARTITION
-    partitions = {_partition_from_item_id(item_id) for item_id, _ in items}
-    if len(partitions) != 1:
-        raise ValueError("2PC checkout requires all items to belong to one stock partition")
-    return next(iter(partitions))
+def _stock_items_by_partition(items: list[tuple[str, int]]) -> dict[int, list[tuple[str, int]]]:
+    grouped: dict[int, list[tuple[str, int]]] = defaultdict(list)
+    for item_id, quantity in items:
+        grouped[_partition_from_item_id(item_id)].append((item_id, int(quantity)))
+    return dict(grouped)
 
 
 def publish_find_stock(order_id: str, item_id: str, quantity: int):
@@ -157,7 +155,7 @@ def publish_checkout_requested(order_id: str):
     )
 
 
-def publish_prepare_stock(tx_id: str, items: list[tuple[str, int]]):
+def publish_prepare_stock(tx_id: str, participant_partition: int, items: list[tuple[str, int]]):
     message = PrepareStockRequest(
         tx_id=tx_id,
         coordinator_partition=KAFKA_CONSUMER_PARTITION,
@@ -167,7 +165,7 @@ def publish_prepare_stock(tx_id: str, items: list[tuple[str, int]]):
         topic="2pc.stock.prepare",
         key=tx_id,
         value=message,
-        partition=_stock_participant_partition(items),
+        partition=participant_partition,
     )
 
 
@@ -186,7 +184,7 @@ def publish_prepare_payment(tx_id: str, user_id: str, amount: int):
     )
 
 
-def publish_stock_decision(tx_id: str, decision: str, items: list[tuple[str, int]]):
+def publish_stock_decision(tx_id: str, decision: str, participant_partition: int):
     message = StockDecisionRequest(
         tx_id=tx_id,
         coordinator_partition=KAFKA_CONSUMER_PARTITION,
@@ -196,7 +194,7 @@ def publish_stock_decision(tx_id: str, decision: str, items: list[tuple[str, int
         topic="2pc.stock.decision",
         key=tx_id,
         value=message,
-        partition=_stock_participant_partition(items),
+        partition=participant_partition,
     )
 
 
@@ -333,17 +331,32 @@ def handle_http_command(command: dict):
 
 
 def _is_prepare_phase_complete(tx: "CheckoutTransaction") -> bool:
-    return tx.stock_prepare_done and tx.payment_prepare_done
+    return len(tx.stock_prepare_partitions) == len(tx.stock_partitions) and tx.payment_prepare_done
 
 
 def _is_decision_phase_complete(tx: "CheckoutTransaction") -> bool:
-    return tx.stock_decision_done and tx.payment_decision_done
+    return len(tx.stock_decision_partitions) == len(tx.stock_partitions) and tx.payment_decision_done
 
 
-def _set_prepare_reply(tx: "CheckoutTransaction", source: str, success: bool, error: str | None):
+def _append_unique_partition(partitions: list[int], participant_partition: int):
+    if participant_partition not in partitions:
+        partitions.append(participant_partition)
+
+
+def _set_prepare_reply(
+    tx: "CheckoutTransaction",
+    source: str,
+    success: bool,
+    error: str | None,
+    participant_partition: int | None = None,
+):
     if source == "stock":
-        tx.stock_prepare_done = True
-        tx.stock_prepare_success = success
+        if participant_partition is None or participant_partition not in tx.stock_partitions:
+            tx.last_error = "unknown stock prepare participant"
+            return
+        _append_unique_partition(tx.stock_prepare_partitions, participant_partition)
+        if not success:
+            _append_unique_partition(tx.stock_prepare_failed_partitions, participant_partition)
     else:
         tx.payment_prepare_done = True
         tx.payment_prepare_success = success
@@ -351,9 +364,19 @@ def _set_prepare_reply(tx: "CheckoutTransaction", source: str, success: bool, er
         tx.last_error = error or "participant prepare failed"
 
 
-def _set_decision_reply(tx: "CheckoutTransaction", source: str, success: bool, error: str | None):
+def _set_decision_reply(
+    tx: "CheckoutTransaction",
+    source: str,
+    success: bool,
+    error: str | None,
+    participant_partition: int | None = None,
+):
     if source == "stock":
-        tx.stock_decision_done = success
+        if participant_partition is None or participant_partition not in tx.stock_partitions:
+            tx.last_error = "unknown stock decision participant"
+            return
+        if success:
+            _append_unique_partition(tx.stock_decision_partitions, participant_partition)
     else:
         tx.payment_decision_done = success
     if not success:
@@ -374,7 +397,9 @@ def _maybe_decide_and_broadcast(tx_id: str, tx: "CheckoutTransaction"):
             order_id=tx.order_id,
             duration_ms=round((time.perf_counter() - prepare_started_at) * 1000, 3),
         )
-    prepare_success = bool(tx.stock_prepare_success) and bool(tx.payment_prepare_success)
+    prepare_success = (
+        len(tx.stock_prepare_failed_partitions) == 0 and bool(tx.payment_prepare_success)
+    )
     tx.decision = "COMMIT" if prepare_success else "ABORT"
     tx.state = "DECIDED"
     set_tx(tx_id, tx)
@@ -387,7 +412,8 @@ def _maybe_decide_and_broadcast(tx_id: str, tx: "CheckoutTransaction"):
         order_id=tx.order_id,
         decision=tx.decision,
     ):
-        publish_stock_decision(tx_id, tx.decision, tx.items)
+        for participant_partition in tx.stock_partitions:
+            publish_stock_decision(tx_id, tx.decision, participant_partition)
         publish_payment_decision(tx_id, tx.decision, tx.user_id)
 
 
@@ -437,7 +463,13 @@ def handle_prepare_stock_reply(message: PrepareStockReply):
         tx = get_tx_from_db(message.tx_id)
         if tx is None or tx.state != "PREPARING":
             return
-        _set_prepare_reply(tx, "stock", message.success, message.error)
+        _set_prepare_reply(
+            tx,
+            "stock",
+            message.success,
+            message.error,
+            participant_partition=message.participant_partition,
+        )
         set_tx(message.tx_id, tx)
         _maybe_decide_and_broadcast(message.tx_id, tx)
 
@@ -470,10 +502,16 @@ def handle_stock_decision_reply(message: StockDecisionReply):
         tx = get_tx_from_db(message.tx_id)
         if tx is None or tx.state != "DECIDED":
             return
-        _set_decision_reply(tx, "stock", message.success, message.error)
+        _set_decision_reply(
+            tx,
+            "stock",
+            message.success,
+            message.error,
+            participant_partition=message.participant_partition,
+        )
         set_tx(message.tx_id, tx)
         if not message.success:
-            publish_stock_decision(message.tx_id, tx.decision, tx.items)
+            publish_stock_decision(message.tx_id, tx.decision, message.participant_partition)
             return
         _maybe_complete(message.tx_id, tx)
 
@@ -605,11 +643,12 @@ class CheckoutTransaction(Struct):
     user_id: str
     total_cost: int
     items: list[tuple[str, int]]
-    stock_prepare_done: bool = False
+    stock_partitions: list[int] = msgspec.field(default_factory=list)
+    stock_prepare_partitions: list[int] = msgspec.field(default_factory=list)
+    stock_prepare_failed_partitions: list[int] = msgspec.field(default_factory=list)
     payment_prepare_done: bool = False
-    stock_prepare_success: bool | None = None
     payment_prepare_success: bool | None = None
-    stock_decision_done: bool = False
+    stock_decision_partitions: list[int] = msgspec.field(default_factory=list)
     payment_decision_done: bool = False
     last_error: str | None = None
 
@@ -702,7 +741,8 @@ def apply_commit_effects(tx: CheckoutTransaction) -> bool:
 def replay_decision(tx_id: str, tx: CheckoutTransaction):
     if tx.decision not in {"COMMIT", "ABORT"}:
         return
-    publish_stock_decision(tx_id, tx.decision, tx.items)
+    for participant_partition in tx.stock_partitions:
+        publish_stock_decision(tx_id, tx.decision, participant_partition)
     publish_payment_decision(tx_id, tx.decision, tx.user_id)
 
 
@@ -768,6 +808,7 @@ def process_checkout_async(order_id: str):
             return
 
         items = aggregate_items(order_entry.items)
+        stock_items_by_partition = _stock_items_by_partition(items)
         tx = CheckoutTransaction(
             state="PREPARING",
             decision="UNKNOWN",
@@ -775,6 +816,7 @@ def process_checkout_async(order_id: str):
             user_id=order_entry.user_id,
             total_cost=order_entry.total_cost,
             items=items,
+            stock_partitions=sorted(stock_items_by_partition),
         )
         set_tx(tx_id, tx)
         _tx_span_state[tx_id] = {"total_started_at": time.perf_counter()}
@@ -789,9 +831,10 @@ def process_checkout_async(order_id: str):
                 order_id=order_id,
                 item_count=len(items),
             ):
-                publish_prepare_stock(tx_id, items)
+                for participant_partition, partition_items in stock_items_by_partition.items():
+                    publish_prepare_stock(tx_id, participant_partition, partition_items)
                 publish_prepare_payment(tx_id, order_entry.user_id, order_entry.total_cost)
-        except ValueError as exc:
+        except Exception as exc:
             tx.decision = "ABORT"
             tx.state = "COMPLETED"
             tx.last_error = str(exc)
