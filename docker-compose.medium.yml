@@ -17,6 +17,7 @@ services:
     hostname: kafka
     container_name: kafka
     restart: unless-stopped
+    cpus: "2.00"
     ports:
       - "9092:9092"
     environment:
@@ -38,11 +39,12 @@ services:
 
   kafka-init:
     image: apache/kafka:latest
+    cpus: "0.25"
     depends_on:
       kafka:
         condition: service_started
     environment:
-      KAFKA_PARTITIONS: 12
+      KAFKA_PARTITIONS: 9
     volumes:
       - ./kafka/init-topics.sh:/init-topics.sh
       - ./kafka/topics.txt:/topics.txt
@@ -55,7 +57,7 @@ services:
     cpus: "1.50"
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
-      KAFKA_PARTITIONS: 12
+      KAFKA_PARTITIONS: 9
       KAFKA_REQUEST_TIMEOUT_SECONDS: 10
     depends_on:
       kafka:
@@ -63,13 +65,260 @@ services:
       kafka-init:
         condition: service_completed_successfully
 
+  orchestrator-0:
+    build: ./orchestrator
+    image: orchestrator:latest
+    restart: unless-stopped
+    cpus: "1.00"
+    ports:
+      - "5001:5000"
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - ORDER_SERVICE_URL=http://order-service-0:5000
+      - PAYMENT_SERVICE_URL=http://payment-service-0:5000
+      - STOCK_SERVICE_URL=http://stock-service-0:5000
+      - ORCHESTRATOR_REQUEST_TIMEOUT_SECONDS=5
+      - KAFKA_CONSUMER_PARTITION=0
+      - REDIS_HOST=orchestrator-db-0
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=redis
+      - REDIS_DB=0
+    depends_on:
+      - orchestrator-db-0
+      - order-service-0
+      - payment-service-0
+      - stock-service-0
+
+  orchestrator-1:
+    image: orchestrator:latest
+    restart: unless-stopped
+    cpus: "1.00"
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - ORDER_SERVICE_URL=http://order-service-0:5000
+      - PAYMENT_SERVICE_URL=http://payment-service-0:5000
+      - STOCK_SERVICE_URL=http://stock-service-0:5000
+      - ORCHESTRATOR_REQUEST_TIMEOUT_SECONDS=5
+      - KAFKA_CONSUMER_PARTITION=1
+      - REDIS_HOST=orchestrator-db-1
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=redis
+      - REDIS_DB=0
+    depends_on:
+      - orchestrator-db-1
+      - order-service-1
+      - payment-service-1
+      - stock-service-1
+
+  orchestrator-2:
+    image: orchestrator:latest
+    restart: unless-stopped
+    cpus: "1.00"
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - ORDER_SERVICE_URL=http://order-service-0:5000
+      - PAYMENT_SERVICE_URL=http://payment-service-0:5000
+      - STOCK_SERVICE_URL=http://stock-service-0:5000
+      - ORCHESTRATOR_REQUEST_TIMEOUT_SECONDS=5
+      - KAFKA_CONSUMER_PARTITION=2
+      - REDIS_HOST=orchestrator-db-2
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=redis
+      - REDIS_DB=0
+    depends_on:
+      - orchestrator-db-2
+      - order-service-2
+      - payment-service-2
+      - stock-service-2
+
+  orchestrator-3:
+    image: orchestrator:latest
+    restart: unless-stopped
+    cpus: "1.00"
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - ORDER_SERVICE_URL=http://order-service-0:5000
+      - PAYMENT_SERVICE_URL=http://payment-service-0:5000
+      - STOCK_SERVICE_URL=http://stock-service-0:5000
+      - ORCHESTRATOR_REQUEST_TIMEOUT_SECONDS=5
+      - KAFKA_CONSUMER_PARTITION=3
+      - REDIS_HOST=orchestrator-db-3
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=redis
+      - REDIS_DB=0
+    depends_on:
+      - orchestrator-db-3
+      - order-service-3
+      - payment-service-3
+      - stock-service-3
+
+  orchestrator-4:
+    image: orchestrator:latest
+    restart: unless-stopped
+    cpus: "1.00"
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - ORDER_SERVICE_URL=http://order-service-0:5000
+      - PAYMENT_SERVICE_URL=http://payment-service-0:5000
+      - STOCK_SERVICE_URL=http://stock-service-0:5000
+      - ORCHESTRATOR_REQUEST_TIMEOUT_SECONDS=5
+      - KAFKA_CONSUMER_PARTITION=4
+      - REDIS_HOST=orchestrator-db-4
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=redis
+      - REDIS_DB=0
+    depends_on:
+      - orchestrator-db-4
+      - order-service-4
+      - payment-service-4
+      - stock-service-4
+
+  orchestrator-5:
+    image: orchestrator:latest
+    restart: unless-stopped
+    cpus: "1.00"
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - ORDER_SERVICE_URL=http://order-service-0:5000
+      - PAYMENT_SERVICE_URL=http://payment-service-0:5000
+      - STOCK_SERVICE_URL=http://stock-service-0:5000
+      - ORCHESTRATOR_REQUEST_TIMEOUT_SECONDS=5
+      - KAFKA_CONSUMER_PARTITION=5
+      - REDIS_HOST=orchestrator-db-5
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=redis
+      - REDIS_DB=0
+    depends_on:
+      - orchestrator-db-5
+      - order-service-5
+      - payment-service-5
+      - stock-service-5
+
+  orchestrator-6:
+    image: orchestrator:latest
+    restart: unless-stopped
+    cpus: "1.00"
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - ORDER_SERVICE_URL=http://order-service-0:5000
+      - PAYMENT_SERVICE_URL=http://payment-service-0:5000
+      - STOCK_SERVICE_URL=http://stock-service-0:5000
+      - ORCHESTRATOR_REQUEST_TIMEOUT_SECONDS=5
+      - KAFKA_CONSUMER_PARTITION=6
+      - REDIS_HOST=orchestrator-db-6
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=redis
+      - REDIS_DB=0
+    depends_on:
+      - orchestrator-db-6
+      - order-service-6
+      - payment-service-6
+      - stock-service-6
+
+  orchestrator-7:
+    image: orchestrator:latest
+    restart: unless-stopped
+    cpus: "1.00"
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - ORDER_SERVICE_URL=http://order-service-0:5000
+      - PAYMENT_SERVICE_URL=http://payment-service-0:5000
+      - STOCK_SERVICE_URL=http://stock-service-0:5000
+      - ORCHESTRATOR_REQUEST_TIMEOUT_SECONDS=5
+      - KAFKA_CONSUMER_PARTITION=7
+      - REDIS_HOST=orchestrator-db-7
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=redis
+      - REDIS_DB=0
+    depends_on:
+      - orchestrator-db-7
+      - order-service-7
+      - payment-service-7
+      - stock-service-7
+
+  orchestrator-8:
+    image: orchestrator:latest
+    restart: unless-stopped
+    cpus: "1.00"
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - ORDER_SERVICE_URL=http://order-service-0:5000
+      - PAYMENT_SERVICE_URL=http://payment-service-0:5000
+      - STOCK_SERVICE_URL=http://stock-service-0:5000
+      - ORCHESTRATOR_REQUEST_TIMEOUT_SECONDS=5
+      - KAFKA_CONSUMER_PARTITION=8
+      - REDIS_HOST=orchestrator-db-8
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=redis
+      - REDIS_DB=0
+    depends_on:
+      - orchestrator-db-8
+      - order-service-8
+      - payment-service-8
+      - stock-service-8
+
+  orchestrator-db-0:
+    image: redis:7.2-bookworm
+    restart: unless-stopped
+    cpus: "0.25"
+    command: redis-server --requirepass redis --maxmemory 256mb
+
+  orchestrator-db-1:
+    image: redis:7.2-bookworm
+    restart: unless-stopped
+    cpus: "0.25"
+    command: redis-server --requirepass redis --maxmemory 256mb
+
+  orchestrator-db-2:
+    image: redis:7.2-bookworm
+    restart: unless-stopped
+    cpus: "0.25"
+    command: redis-server --requirepass redis --maxmemory 256mb
+
+  orchestrator-db-3:
+    image: redis:7.2-bookworm
+    restart: unless-stopped
+    cpus: "0.25"
+    command: redis-server --requirepass redis --maxmemory 256mb
+
+  orchestrator-db-4:
+    image: redis:7.2-bookworm
+    restart: unless-stopped
+    cpus: "0.25"
+    command: redis-server --requirepass redis --maxmemory 256mb
+
+  orchestrator-db-5:
+    image: redis:7.2-bookworm
+    restart: unless-stopped
+    cpus: "0.25"
+    command: redis-server --requirepass redis --maxmemory 256mb
+
+  orchestrator-db-6:
+    image: redis:7.2-bookworm
+    restart: unless-stopped
+    cpus: "0.25"
+    command: redis-server --requirepass redis --maxmemory 256mb
+
+  orchestrator-db-7:
+    image: redis:7.2-bookworm
+    restart: unless-stopped
+    cpus: "0.25"
+    command: redis-server --requirepass redis --maxmemory 256mb
+
+  orchestrator-db-8:
+    image: redis:7.2-bookworm
+    restart: unless-stopped
+    cpus: "0.25"
+    command: redis-server --requirepass redis --maxmemory 256mb
+
   order-service-0:
     build: ./order
     image: order:latest
     restart: unless-stopped
     cpus: "1.00"
     environment:
-      KAFKA_PARTITIONS: 12
+      ORCHESTRATOR_URL: http://orchestrator-0:5000
+      ORCHESTRATOR_PARTITIONS: 9
       GATEWAY_URL: http://gateway:80
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 0
@@ -97,7 +346,8 @@ services:
     restart: unless-stopped
     cpus: "1.00"
     environment:
-      KAFKA_PARTITIONS: 12
+      ORCHESTRATOR_URL: http://orchestrator-0:5000
+      ORCHESTRATOR_PARTITIONS: 9
       GATEWAY_URL: http://gateway:80
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 1
@@ -125,7 +375,8 @@ services:
     restart: unless-stopped
     cpus: "1.00"
     environment:
-      KAFKA_PARTITIONS: 12
+      ORCHESTRATOR_URL: http://orchestrator-0:5000
+      ORCHESTRATOR_PARTITIONS: 9
       GATEWAY_URL: http://gateway:80
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 2
@@ -153,7 +404,8 @@ services:
     restart: unless-stopped
     cpus: "1.00"
     environment:
-      KAFKA_PARTITIONS: 12
+      ORCHESTRATOR_URL: http://orchestrator-0:5000
+      ORCHESTRATOR_PARTITIONS: 9
       GATEWAY_URL: http://gateway:80
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 3
@@ -181,7 +433,8 @@ services:
     restart: unless-stopped
     cpus: "1.00"
     environment:
-      KAFKA_PARTITIONS: 12
+      ORCHESTRATOR_URL: http://orchestrator-0:5000
+      ORCHESTRATOR_PARTITIONS: 9
       GATEWAY_URL: http://gateway:80
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 4
@@ -209,7 +462,8 @@ services:
     restart: unless-stopped
     cpus: "1.00"
     environment:
-      KAFKA_PARTITIONS: 12
+      ORCHESTRATOR_URL: http://orchestrator-0:5000
+      ORCHESTRATOR_PARTITIONS: 9
       GATEWAY_URL: http://gateway:80
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 5
@@ -237,7 +491,8 @@ services:
     restart: unless-stopped
     cpus: "1.00"
     environment:
-      KAFKA_PARTITIONS: 12
+      ORCHESTRATOR_URL: http://orchestrator-0:5000
+      ORCHESTRATOR_PARTITIONS: 9
       GATEWAY_URL: http://gateway:80
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 6
@@ -265,7 +520,8 @@ services:
     restart: unless-stopped
     cpus: "1.00"
     environment:
-      KAFKA_PARTITIONS: 12
+      ORCHESTRATOR_URL: http://orchestrator-0:5000
+      ORCHESTRATOR_PARTITIONS: 9
       GATEWAY_URL: http://gateway:80
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 7
@@ -293,7 +549,8 @@ services:
     restart: unless-stopped
     cpus: "1.00"
     environment:
-      KAFKA_PARTITIONS: 12
+      ORCHESTRATOR_URL: http://orchestrator-0:5000
+      ORCHESTRATOR_PARTITIONS: 9
       GATEWAY_URL: http://gateway:80
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 8
@@ -316,97 +573,14 @@ services:
     cpus: "0.25"
     command: redis-server --requirepass redis --maxmemory 512mb
 
-  order-service-9:
-    image: order:latest
-    restart: unless-stopped
-    cpus: "1.00"
-    environment:
-      KAFKA_PARTITIONS: 12
-      GATEWAY_URL: http://gateway:80
-      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
-      KAFKA_CONSUMER_PARTITION: 9
-      KAFKA_CONSUMER_INSTANCE_ID: order-service-9
-      REDIS_HOST: order-db-9
-    command: gunicorn -b 0.0.0.0:5000 -w 1 --timeout 30 --log-level=info ${ORDER_APP_MODULE:-order2pcApp}:app
-    env_file:
-      - env/order_redis.env
-    depends_on:
-      order-db-9:
-        condition: service_started
-      kafka:
-        condition: service_started
-      kafka-init:
-        condition: service_completed_successfully
-
-  order-db-9:
-    image: redis:7.2-bookworm
-    restart: unless-stopped
-    cpus: "0.25"
-    command: redis-server --requirepass redis --maxmemory 512mb
-
-  order-service-10:
-    image: order:latest
-    restart: unless-stopped
-    cpus: "1.00"
-    environment:
-      KAFKA_PARTITIONS: 12
-      GATEWAY_URL: http://gateway:80
-      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
-      KAFKA_CONSUMER_PARTITION: 10
-      KAFKA_CONSUMER_INSTANCE_ID: order-service-10
-      REDIS_HOST: order-db-10
-    command: gunicorn -b 0.0.0.0:5000 -w 1 --timeout 30 --log-level=info ${ORDER_APP_MODULE:-order2pcApp}:app
-    env_file:
-      - env/order_redis.env
-    depends_on:
-      order-db-10:
-        condition: service_started
-      kafka:
-        condition: service_started
-      kafka-init:
-        condition: service_completed_successfully
-
-  order-db-10:
-    image: redis:7.2-bookworm
-    restart: unless-stopped
-    cpus: "0.25"
-    command: redis-server --requirepass redis --maxmemory 512mb
-
-  order-service-11:
-    image: order:latest
-    restart: unless-stopped
-    cpus: "1.00"
-    environment:
-      KAFKA_PARTITIONS: 12
-      GATEWAY_URL: http://gateway:80
-      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
-      KAFKA_CONSUMER_PARTITION: 11
-      KAFKA_CONSUMER_INSTANCE_ID: order-service-11
-      REDIS_HOST: order-db-11
-    command: gunicorn -b 0.0.0.0:5000 -w 1 --timeout 30 --log-level=info ${ORDER_APP_MODULE:-order2pcApp}:app
-    env_file:
-      - env/order_redis.env
-    depends_on:
-      order-db-11:
-        condition: service_started
-      kafka:
-        condition: service_started
-      kafka-init:
-        condition: service_completed_successfully
-
-  order-db-11:
-    image: redis:7.2-bookworm
-    restart: unless-stopped
-    cpus: "0.25"
-    command: redis-server --requirepass redis --maxmemory 512mb
-
   stock-service-0:
     build: ./stock
     image: stock:latest
     restart: unless-stopped
     cpus: "1.00"
     environment:
-      KAFKA_PARTITIONS: 12
+      ORCHESTRATOR_URL: http://orchestrator-0:5000
+      ORCHESTRATOR_PARTITIONS: 9
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 0
       KAFKA_CONSUMER_INSTANCE_ID: stock-service-0
@@ -433,7 +607,8 @@ services:
     restart: unless-stopped
     cpus: "1.00"
     environment:
-      KAFKA_PARTITIONS: 12
+      ORCHESTRATOR_URL: http://orchestrator-0:5000
+      ORCHESTRATOR_PARTITIONS: 9
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 1
       KAFKA_CONSUMER_INSTANCE_ID: stock-service-1
@@ -460,7 +635,8 @@ services:
     restart: unless-stopped
     cpus: "1.00"
     environment:
-      KAFKA_PARTITIONS: 12
+      ORCHESTRATOR_URL: http://orchestrator-0:5000
+      ORCHESTRATOR_PARTITIONS: 9
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 2
       KAFKA_CONSUMER_INSTANCE_ID: stock-service-2
@@ -487,7 +663,8 @@ services:
     restart: unless-stopped
     cpus: "1.00"
     environment:
-      KAFKA_PARTITIONS: 12
+      ORCHESTRATOR_URL: http://orchestrator-0:5000
+      ORCHESTRATOR_PARTITIONS: 9
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 3
       KAFKA_CONSUMER_INSTANCE_ID: stock-service-3
@@ -514,7 +691,8 @@ services:
     restart: unless-stopped
     cpus: "1.00"
     environment:
-      KAFKA_PARTITIONS: 12
+      ORCHESTRATOR_URL: http://orchestrator-0:5000
+      ORCHESTRATOR_PARTITIONS: 9
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 4
       KAFKA_CONSUMER_INSTANCE_ID: stock-service-4
@@ -541,7 +719,8 @@ services:
     restart: unless-stopped
     cpus: "1.00"
     environment:
-      PARTITION: 12
+      ORCHESTRATOR_URL: http://orchestrator-0:5000
+      ORCHESTRATOR_PARTITIONS: 9
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 5
       KAFKA_CONSUMER_INSTANCE_ID: stock-service-5
@@ -568,7 +747,8 @@ services:
     restart: unless-stopped
     cpus: "1.00"
     environment:
-      PARTITION: 12
+      ORCHESTRATOR_URL: http://orchestrator-0:5000
+      ORCHESTRATOR_PARTITIONS: 9
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 6
       KAFKA_CONSUMER_INSTANCE_ID: stock-service-6
@@ -595,7 +775,8 @@ services:
     restart: unless-stopped
     cpus: "1.00"
     environment:
-      PARTITION: 12
+      ORCHESTRATOR_URL: http://orchestrator-0:5000
+      ORCHESTRATOR_PARTITIONS: 9
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 7
       KAFKA_CONSUMER_INSTANCE_ID: stock-service-7
@@ -622,7 +803,8 @@ services:
     restart: unless-stopped
     cpus: "1.00"
     environment:
-      PARTITION: 12
+      ORCHESTRATOR_URL: http://orchestrator-0:5000
+      ORCHESTRATOR_PARTITIONS: 9
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 8
       KAFKA_CONSUMER_INSTANCE_ID: stock-service-8
@@ -644,94 +826,14 @@ services:
     cpus: "0.25"
     command: redis-server --requirepass redis --maxmemory 512mb
 
-  stock-service-9:
-    image: stock:latest
-    restart: unless-stopped
-    cpus: "1.00"
-    environment:
-      PARTITION: 12
-      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
-      KAFKA_CONSUMER_PARTITION: 9
-      KAFKA_CONSUMER_INSTANCE_ID: stock-service-9
-      REDIS_HOST: stock-db-9
-    command: gunicorn -b 0.0.0.0:5000 -w 1 --timeout 30 --log-level=info ${STOCK_APP_MODULE:-stock2pcApp}:app
-    env_file:
-      - env/stock_redis.env
-    depends_on:
-      stock-db-9:
-        condition: service_started
-      kafka:
-        condition: service_started
-      kafka-init:
-        condition: service_completed_successfully
-
-  stock-db-9:
-    image: redis:7.2-bookworm
-    restart: unless-stopped
-    cpus: "0.25"
-    command: redis-server --requirepass redis --maxmemory 512mb
-
-  stock-service-10:
-    image: stock:latest
-    restart: unless-stopped
-    cpus: "1.00"
-    environment:
-      PARTITION: 12
-      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
-      KAFKA_CONSUMER_PARTITION: 10
-      KAFKA_CONSUMER_INSTANCE_ID: stock-service-10
-      REDIS_HOST: stock-db-10
-    command: gunicorn -b 0.0.0.0:5000 -w 1 --timeout 30 --log-level=info ${STOCK_APP_MODULE:-stock2pcApp}:app
-    env_file:
-      - env/stock_redis.env
-    depends_on:
-      stock-db-10:
-        condition: service_started
-      kafka:
-        condition: service_started
-      kafka-init:
-        condition: service_completed_successfully
-
-  stock-db-10:
-    image: redis:7.2-bookworm
-    restart: unless-stopped
-    cpus: "0.25"
-    command: redis-server --requirepass redis --maxmemory 512mb
-
-  stock-service-11:
-    image: stock:latest
-    restart: unless-stopped
-    cpus: "1.00"
-    environment:
-      PARTITION: 12
-      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
-      KAFKA_CONSUMER_PARTITION: 11
-      KAFKA_CONSUMER_INSTANCE_ID: stock-service-11
-      REDIS_HOST: stock-db-11
-    command: gunicorn -b 0.0.0.0:5000 -w 1 --timeout 30 --log-level=info ${STOCK_APP_MODULE:-stock2pcApp}:app
-    env_file:
-      - env/stock_redis.env
-    depends_on:
-      stock-db-11:
-        condition: service_started
-      kafka:
-        condition: service_started
-      kafka-init:
-        condition: service_completed_successfully
-
-  stock-db-11:
-    image: redis:7.2-bookworm
-    restart: unless-stopped
-    cpus: "0.25"
-    command: redis-server --requirepass redis --maxmemory 512mb
-
   payment-service-0:
     build: ./payment
     image: user:latest
     restart: unless-stopped
     cpus: "1.00"
     environment:
-      PARTITION: 12
+      ORCHESTRATOR_URL: http://orchestrator-0:5000
+      ORCHESTRATOR_PARTITIONS: 9
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 0
       KAFKA_CONSUMER_INSTANCE_ID: payment-service-0
@@ -758,7 +860,8 @@ services:
     restart: unless-stopped
     cpus: "1.00"
     environment:
-      PARTITION: 12
+      ORCHESTRATOR_URL: http://orchestrator-0:5000
+      ORCHESTRATOR_PARTITIONS: 9
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 1
       KAFKA_CONSUMER_INSTANCE_ID: payment-service-1
@@ -785,7 +888,8 @@ services:
     restart: unless-stopped
     cpus: "1.00"
     environment:
-      PARTITION: 12
+      ORCHESTRATOR_URL: http://orchestrator-0:5000
+      ORCHESTRATOR_PARTITIONS: 9
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 2
       KAFKA_CONSUMER_INSTANCE_ID: payment-service-2
@@ -812,7 +916,8 @@ services:
     restart: unless-stopped
     cpus: "1.00"
     environment:
-      PARTITION: 12
+      ORCHESTRATOR_URL: http://orchestrator-0:5000
+      ORCHESTRATOR_PARTITIONS: 9
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 3
       KAFKA_CONSUMER_INSTANCE_ID: payment-service-3
@@ -839,7 +944,8 @@ services:
     restart: unless-stopped
     cpus: "1.00"
     environment:
-      PARTITION: 12
+      ORCHESTRATOR_URL: http://orchestrator-0:5000
+      ORCHESTRATOR_PARTITIONS: 9
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 4
       KAFKA_CONSUMER_INSTANCE_ID: payment-service-4
@@ -866,7 +972,8 @@ services:
     restart: unless-stopped
     cpus: "1.00"
     environment:
-      PARTITION: 12
+      ORCHESTRATOR_URL: http://orchestrator-0:5000
+      ORCHESTRATOR_PARTITIONS: 9
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 5
       KAFKA_CONSUMER_INSTANCE_ID: payment-service-5
@@ -893,7 +1000,8 @@ services:
     restart: unless-stopped
     cpus: "1.00"
     environment:
-      PARTITION: 12
+      ORCHESTRATOR_URL: http://orchestrator-0:5000
+      ORCHESTRATOR_PARTITIONS: 9
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 6
       KAFKA_CONSUMER_INSTANCE_ID: payment-service-6
@@ -920,7 +1028,8 @@ services:
     restart: unless-stopped
     cpus: "1.00"
     environment:
-      PARTITION: 12
+      ORCHESTRATOR_URL: http://orchestrator-0:5000
+      ORCHESTRATOR_PARTITIONS: 9
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 7
       KAFKA_CONSUMER_INSTANCE_ID: payment-service-7
@@ -947,7 +1056,8 @@ services:
     restart: unless-stopped
     cpus: "1.00"
     environment:
-      PARTITION: 12
+      ORCHESTRATOR_URL: http://orchestrator-0:5000
+      ORCHESTRATOR_PARTITIONS: 9
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_PARTITION: 8
       KAFKA_CONSUMER_INSTANCE_ID: payment-service-8
@@ -969,87 +1079,6 @@ services:
     cpus: "0.25"
     command: redis-server --requirepass redis --maxmemory 512mb
 
-  payment-service-9:
-    image: user:latest
-    restart: unless-stopped
-    cpus: "1.00"
-    environment:
-      PARTITION: 12
-      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
-      KAFKA_CONSUMER_PARTITION: 9
-      KAFKA_CONSUMER_INSTANCE_ID: payment-service-9
-      REDIS_HOST: payment-db-9
-    command: gunicorn -b 0.0.0.0:5000 -w 1 --timeout 30 --log-level=info ${PAYMENT_APP_MODULE:-payment2pcApp}:app
-    env_file:
-      - env/payment_redis.env
-    depends_on:
-      payment-db-9:
-        condition: service_started
-      kafka:
-        condition: service_started
-      kafka-init:
-        condition: service_completed_successfully
-
-  payment-db-9:
-    image: redis:7.2-bookworm
-    restart: unless-stopped
-    cpus: "0.25"
-    command: redis-server --requirepass redis --maxmemory 512mb
-
-  payment-service-10:
-    image: user:latest
-    restart: unless-stopped
-    cpus: "1.00"
-    environment:
-      PARTITION: 12
-      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
-      KAFKA_CONSUMER_PARTITION: 10
-      KAFKA_CONSUMER_INSTANCE_ID: payment-service-10
-      REDIS_HOST: payment-db-10
-    command: gunicorn -b 0.0.0.0:5000 -w 1 --timeout 30 --log-level=info ${PAYMENT_APP_MODULE:-payment2pcApp}:app
-    env_file:
-      - env/payment_redis.env
-    depends_on:
-      payment-db-10:
-        condition: service_started
-      kafka:
-        condition: service_started
-      kafka-init:
-        condition: service_completed_successfully
-
-  payment-db-10:
-    image: redis:7.2-bookworm
-    restart: unless-stopped
-    cpus: "0.25"
-    command: redis-server --requirepass redis --maxmemory 512mb
-
-  payment-service-11:
-    image: user:latest
-    restart: unless-stopped
-    cpus: "1.00"
-    environment:
-      PARTITION: 12
-      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
-      KAFKA_CONSUMER_PARTITION: 11
-      KAFKA_CONSUMER_INSTANCE_ID: payment-service-11
-      REDIS_HOST: payment-db-11
-    command: gunicorn -b 0.0.0.0:5000 -w 1 --timeout 30 --log-level=info ${PAYMENT_APP_MODULE:-payment2pcApp}:app
-    env_file:
-      - env/payment_redis.env
-    depends_on:
-      payment-db-11:
-        condition: service_started
-      kafka:
-        condition: service_started
-      kafka-init:
-        condition: service_completed_successfully
-
-  payment-db-11:
-    image: redis:7.2-bookworm
-    restart: unless-stopped
-    cpus: "0.25"
-    command: redis-server --requirepass redis --maxmemory 512mb
-
   watchdog:
     image: docker:cli
     restart: unless-stopped
@@ -1058,7 +1087,7 @@ services:
     environment:
       COMPOSE_PROJECT_NAME: ${COMPOSE_PROJECT_NAME:-dds26-team4}
       WATCHDOG_INTERVAL_SECONDS: 5
-      WATCHDOG_PARTITIONS: 12
+      WATCHDOG_PARTITIONS: 9
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./watchdog/watchdog.sh:/watchdog/watchdog.sh:ro
