@@ -226,6 +226,7 @@ def handle_prepare_stock_message(message: PrepareStockRequest):
         reply = PrepareStockReply(
             tx_id=message.tx_id,
             coordinator_partition=message.coordinator_partition,
+            participant_partition=KAFKA_CONSUMER_PARTITION,
             success=success,
             error=error,
         )
@@ -262,6 +263,7 @@ def handle_stock_decision_message(message: StockDecisionRequest):
         reply = StockDecisionReply(
             tx_id=message.tx_id,
             coordinator_partition=message.coordinator_partition,
+            participant_partition=KAFKA_CONSUMER_PARTITION,
             decision=decision,
             success=success,
             error=error,
