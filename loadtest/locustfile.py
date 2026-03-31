@@ -80,6 +80,12 @@ def normalize_host(url: str) -> str:
 
 def classify_checkout_response(status_code: int, body: str) -> tuple[str, bool]:
     lowered = body.lower()
+    if status_code == 503:
+        return "/orders/checkout/[order_id] service-unavailable", False
+    if status_code == 504:
+        return "/orders/checkout/[order_id] gateway-timeout", False
+    if status_code == 500:
+        return "/orders/checkout/[order_id] internal-server-error", False
     if 500 <= status_code:
         return "/orders/checkout/[order_id] server-error", False
     if 400 <= status_code < 500:
