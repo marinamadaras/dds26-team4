@@ -11,7 +11,7 @@ from span_logger import span
 
 BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:29092")
 PARTITIONS = int(os.getenv("KAFKA_PARTITIONS", "3"))
-REQUEST_TIMEOUT_SECONDS = float(os.getenv("KAFKA_REQUEST_TIMEOUT_SECONDS", "10"))
+REQUEST_TIMEOUT_SECONDS = float(os.getenv("KAFKA_REQUEST_TIMEOUT_SECONDS", "360"))
 REPLY_TOPICS = (
     "gateway.order.replies",
     "gateway.stock.replies",
@@ -166,7 +166,7 @@ def _send_command(
             trace_id=request_id,
             partition=partition,
         ):
-            if not _reply_consumer_ready[partition].wait(timeout=5):
+            if not _reply_consumer_ready[partition].wait(timeout=40):
                 return 503, {"error": "Gateway reply consumer not ready"}
 
         pending = {
