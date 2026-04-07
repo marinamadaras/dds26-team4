@@ -10,6 +10,8 @@ services:
       - "8000:80"
     depends_on:
       - api-gateway
+    cpus: 46
+
 
   kafka:
     image: apache/kafka:latest
