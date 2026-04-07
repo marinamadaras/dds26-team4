@@ -166,7 +166,7 @@ def _send_command(
             trace_id=request_id,
             partition=partition,
         ):
-            if not _reply_consumer_ready[partition].wait(timeout=5):
+            if not _reply_consumer_ready[partition].wait(timeout=60):
                 return 503, {"error": "Gateway reply consumer not ready"}
 
         pending = {
