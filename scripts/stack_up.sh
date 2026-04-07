@@ -46,7 +46,7 @@ echo "Wrote ${ENV_FILE}"
 
 cd "${REPO_ROOT}"
 
-docker compose up -d --build
+docker compose -f docker-compose.medium.yml up -d --build
 
 # nginx caches upstream resolution at startup. Restarting it here makes sure it
 # talks to the newly recreated api-gateway container after rebuilds.
