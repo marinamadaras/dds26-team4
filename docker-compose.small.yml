@@ -4,7 +4,6 @@ services:
   gateway:
     image: nginx:1.25-bookworm
     restart: unless-stopped
-    cpus: "0.50"
     volumes:
       - ./gateway_nginx.conf:/etc/nginx/nginx.conf:ro
     ports:
@@ -52,11 +51,10 @@ services:
     build: ./api-gateway
     image: api-gateway:latest
     restart: unless-stopped
-    cpus: "1.00"
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_PARTITIONS: 1
-      KAFKA_REQUEST_TIMEOUT_SECONDS: 10
+      KAFKA_REQUEST_TIMEOUT_SECONDS: 3600
     depends_on:
       kafka:
         condition: service_started
@@ -67,7 +65,6 @@ services:
     build: ./order
     image: order:latest
     restart: unless-stopped
-    cpus: "1.00"
     environment:
       KAFKA_PARTITIONS: 1
       GATEWAY_URL: http://gateway:80
@@ -89,14 +86,12 @@ services:
   order-db-0:
     image: redis:7.2-bookworm
     restart: unless-stopped
-    cpus: "0.50"
     command: redis-server --requirepass redis --maxmemory 512mb
 
   stock-service-0:
     build: ./stock
     image: stock:latest
     restart: unless-stopped
-    cpus: "1.00"
     environment:
       KAFKA_PARTITIONS: 1
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
@@ -117,14 +112,12 @@ services:
   stock-db-0:
     image: redis:7.2-bookworm
     restart: unless-stopped
-    cpus: "0.50"
     command: redis-server --requirepass redis --maxmemory 512mb
 
   payment-service-0:
     build: ./payment
     image: user:latest
     restart: unless-stopped
-    cpus: "1.00"
     environment:
       KAFKA_PARTITIONS: 1
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
@@ -145,13 +138,11 @@ services:
   payment-db-0:
     image: redis:7.2-bookworm
     restart: unless-stopped
-    cpus: "0.50"
     command: redis-server --requirepass redis --maxmemory 512mb
 
   watchdog:
     image: docker:cli
     restart: unless-stopped
-    cpus: "0.25"
     entrypoint: ["/bin/sh", "/watchdog/watchdog.sh"]
     environment:
       COMPOSE_PROJECT_NAME: ${COMPOSE_PROJECT_NAME:-dds26-team4}
