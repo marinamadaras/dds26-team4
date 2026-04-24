@@ -1,3 +1,22 @@
+# For Review 
+main -> default implementation with both saga and 2pc, no orchestration
+inschallah -> Orchestrator: After the interview where we ran into troubles with larger docker compose files, we made this
+inschallah-cpu -> Orchestrator: same as above with cpu limits (reccommended)
+
+Branches we used during interview but had troubles with regarding large docker compose
+orchestrator-test -> orchestrator implemented, with added consistency test (in loadtest there is a readme file that explains how to run this)
+orchestrator-> same as orchestrator test, without our own testing files
+
+As a reminder from our email, to run orchestrator the easiest way would be:
+
+checkout inchallah
+bash scripts/stack_up.sh saga (or 2pc)
+python loadtest/init_orders.py
+locust -f loadtest/locustfile.py
+Make sure the host field in the locust ui is http://127.0.0.1:8000
+
+
+
 # Distributed Data Systems Project Template
 
 Basic project structure with Python's Flask and Redis. 
